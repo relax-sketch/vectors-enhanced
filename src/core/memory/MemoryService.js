@@ -232,6 +232,50 @@ export class MemoryService {
         };
     }
 
+    /**
+     * 缓存的 API Key（用于避免重复写入）
+     * @type {string|null}
+     */
+    _cachedApiKey = null;
+
+    /**
+     * 设置自定义API的API Key到SillyTavern secrets
+     * @param {string} apiKey - API密钥
+     * @returns {Promise<boolean>} 是否成功
+     */
+    async setCustomApiKey(apiKey) {
+        // 如果API Key没有变化，跳过设置
+        if (this._cachedApiKey === apiKey) {
+            console.log('[MemoryService] API Key未变化，跳过设置 (来自缓存)');
+            return true;
+        }
+
+        try {
+            const headers = this.getRequestHeaders ? this.getRequestHeaders() : {};
+            headers['Content-Type'] = 'application/json';
+
+            const response = await fetch('/api/secrets/write', {
+                method: 'POST',
+                headers: headers,
+                body: JSON.stringify({
+                    key: 'api_key_custom',
+                    value: apiKey
+                })
+            });
+
+            if (!response.ok) {
+                throw new Error(`设置API Key失败: HTTP ${response.status}`);
+            }
+
+            // 更新缓存
+            this._cachedApiKey = apiKey;
+            console.log('[MemoryService] 自定义API Key已设置并缓存');
+            return true;
+        } catch (error) {
+            console.error('[MemoryService] 设置API Key失败:', error);
+            return false;
+        }
+    }
 
     /**
      * 调用OpenAI兼容API（通过SillyTavern后端代理，避免CORS问题）
@@ -256,6 +300,9 @@ export class MemoryService {
         baseUrl = baseUrl.replace(/\/$/, '');
         // 确保以/v1结尾
         baseUrl = baseUrl + '/v1';
+
+        // 先将 API Key 写入 SillyTavern secrets，避免需要手动点连接
+        await this.setCustomApiKey(apiKey);
 
         try {
             // 创建超时控制器
@@ -314,7 +361,7 @@ export class MemoryService {
                 headers: headers,
                 body: JSON.stringify({
                     messages: messages,
-                    model: model || 'gpt-3.5-turbo',
+                    model: (model || 'gpt-3.5-turbo').trim(), // trim() 移除首尾空格
                     temperature: 1,
                     max_tokens: maxTokens,
                     stream: false,
@@ -796,6 +843,11 @@ export class MemoryService {
         baseUrl = baseUrl.replace(/\/v1\/?$/, '');
         baseUrl = baseUrl.replace(/\/$/, '');
         baseUrl = baseUrl + '/v1';
+
+        // 先将 API Key 写入 SillyTavern secrets，确保后端能读取到
+        if (apiKey) {
+            await this.setCustomApiKey(apiKey);
+        }
 
         try {
             // 获取请求头（包含CSRF token）
