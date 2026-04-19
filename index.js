@@ -388,6 +388,35 @@ function getChatTasks(chatId) {
 }
 
 /**
+ * Gets tasks visible in a chat, including tasks marked as global in other chats.
+ * Global tasks keep their original ownerChatId so vector collection IDs remain stable.
+ * @param {string} chatId Chat ID
+ * @returns {Array} Array of current and global tasks
+ */
+function getVisibleChatTasks(chatId) {
+  const localTasks = getChatTasks(chatId).map(task => {
+    task.ownerChatId = task.ownerChatId || chatId;
+    task.isGlobalFromOtherChat = false;
+    return task;
+  });
+
+  const globalTasks = [];
+  for (const [ownerChatId, tasks] of Object.entries(settings.vector_tasks || {})) {
+    if (!ownerChatId || ownerChatId === chatId || !Array.isArray(tasks)) continue;
+
+    tasks
+      .filter(task => task.global === true)
+      .forEach(task => {
+        task.ownerChatId = task.ownerChatId || ownerChatId;
+        task.isGlobalFromOtherChat = true;
+        globalTasks.push(task);
+      });
+  }
+
+  return [...localTasks, ...globalTasks];
+}
+
+/**
  * Adds a new vector task
  * @param {string} chatId Chat ID
  * @param {object} task Task object
@@ -426,6 +455,41 @@ async function removeVectorTask(chatId, taskId) {
     Object.assign(extension_settings.vectors_enhanced, settings);
     saveSettingsDebounced();
   }
+}
+
+/**
+ * Toggles whether a vector task is globally visible in all chats.
+ * @param {string} chatId Owner chat ID
+ * @param {string} taskId Task ID
+ * @param {boolean} global Whether the task should be global
+ */
+async function toggleGlobalVectorTask(chatId, taskId, global) {
+  if (!chatId || chatId === 'null' || chatId === 'undefined') {
+    console.error('Vectors: toggleGlobalVectorTask called with invalid chatId:', chatId);
+    return;
+  }
+
+  const tasks = getChatTasks(chatId);
+  const task = tasks.find(t => t.taskId === taskId);
+  if (!task) {
+    console.warn('Vectors: global toggle task not found:', { chatId, taskId });
+    return;
+  }
+
+  task.global = Boolean(global);
+  if (task.global) {
+    task.ownerChatId = task.ownerChatId || chatId;
+    task.globalEnabledAt = Date.now();
+  } else {
+    delete task.globalEnabledAt;
+  }
+
+  settings.vector_tasks[chatId] = tasks;
+  Object.assign(extension_settings.vectors_enhanced, settings);
+  saveSettingsDebounced();
+
+  await updateTaskList(getVisibleChatTasks, renameVectorTask, removeVectorTask, toggleGlobalVectorTask);
+  toastr.success(task.global ? '任务已设为全局' : '任务已取消全局');
 }
 
 /**
@@ -503,7 +567,7 @@ async function renameVectorTask(chatId, taskId, currentName) {
       });
 
       // Refresh the task list UI
-      await updateTaskList(getChatTasks, renameVectorTask, removeVectorTask);
+      await updateTaskList(getVisibleChatTasks, renameVectorTask, removeVectorTask, toggleGlobalVectorTask);
       toastr.success('任务已重命名');
     }
   }
@@ -1662,7 +1726,7 @@ async function performVectorization(contentSettings, chatId, isIncremental, item
       toastr.success(successMessage, '向量化完成');
 
       // Refresh task list UI
-      await updateTaskList(getChatTasks, renameVectorTask, removeVectorTask);
+      await updateTaskList(getVisibleChatTasks, renameVectorTask, removeVectorTask, toggleGlobalVectorTask);
 
       return {
         success: true,
@@ -1736,7 +1800,7 @@ async function performVectorization(contentSettings, chatId, isIncremental, item
                 isPartial: true
             });
             toastr.info(`向量化失败，但已保存 ${processedChunksCount} 个块的数据`, '部分保存');
-            await updateTaskList(getChatTasks, renameVectorTask, removeVectorTask);
+            await updateTaskList(getVisibleChatTasks, renameVectorTask, removeVectorTask, toggleGlobalVectorTask);
             return { success: false, aborted: isAbort, partial: true, savedCount: processedChunksCount, error: `操作失败（已保存部分数据）: ${error.message}` };
         } else {
             await storageAdapter.purgeVectorIndex(collectionId);
@@ -2535,7 +2599,7 @@ async function rearrangeChat(chat, contextSize, abort, type) {
     }
 
     // Get all enabled tasks for this chat
-    const allTasks = getChatTasks(chatId);
+    const allTasks = getVisibleChatTasks(chatId);
     const tasks = allTasks.filter(t => t.enabled);
 
     console.debug(`Vectors: Chat ${chatId} has ${allTasks.length} total tasks, ${tasks.length} enabled`);
@@ -2561,7 +2625,7 @@ async function rearrangeChat(chat, contextSize, abort, type) {
         collectionId = task.source;
         console.debug(`Vectors: Querying external task "${task.name}" using source collection "${collectionId}"`);
       } else {
-        collectionId = `${chatId}_${task.taskId}`;
+        collectionId = `${task.ownerChatId || chatId}_${task.taskId}`;
         console.debug(`Vectors: Querying collection "${collectionId}" for task "${task.name}"`);
       }
 
@@ -3096,7 +3160,7 @@ const onChatEvent = debounce(async () => {
   // Update UI lists when chat changes
   await updateFileList();
   updateChatSettings();
-  await updateTaskList(getChatTasks, renameVectorTask, removeVectorTask);
+  await updateTaskList(getVisibleChatTasks, renameVectorTask, removeVectorTask, toggleGlobalVectorTask);
 }, debounce_timeout.relaxed);
 
 /**
@@ -3487,9 +3551,10 @@ jQuery(async () => {
     saveSettingsDebounced,
     updateFileList,
     updateWorldInfoList,
-    getChatTasks,
+    getChatTasks: getVisibleChatTasks,
     renameVectorTask,
     removeVectorTask,
+    toggleGlobalVectorTask,
     updateTaskList,  // 添加这个函数引用
     toggleMessageRangeVisibility,
     showTagExamples,
@@ -3640,7 +3705,7 @@ jQuery(async () => {
     saveSettingsDebounced();
   });
   eventSource.on(event_types.CHAT_CHANGED, async () => {
-    await updateTaskList(getChatTasks, renameVectorTask, removeVectorTask);
+    await updateTaskList(getVisibleChatTasks, renameVectorTask, removeVectorTask, toggleGlobalVectorTask);
     MessageUI.updateHiddenMessagesInfo();
     // Auto-cleanup invalid world info selections when switching chats
     if (settings.selected_content.world_info.enabled) {
@@ -3932,7 +3997,7 @@ jQuery(async () => {
       if (result?.success) {
         toastr.success(`成功创建导入任务`);
         // 刷新任务列表
-        await updateTaskList(getChatTasks, renameVectorTask, removeVectorTask);
+        await updateTaskList(getVisibleChatTasks, renameVectorTask, removeVectorTask, toggleGlobalVectorTask);
 
         // 显示存储路径弹窗
         showImportTaskStoragePath(chatId, result.taskId, customTaskName);
@@ -4251,7 +4316,7 @@ function createDebugAPI() {
     // 核心功能
     cleanupInvalidSelections: cleanupInvalidSelections,
     updateWorldInfoList: updateWorldInfoList,
-    updateTaskList: (getChatTasks, renameVectorTask, removeVectorTask) => updateTaskList(getChatTasks, renameVectorTask, removeVectorTask),
+    updateTaskList: (getChatTasks, renameVectorTask, removeVectorTask) => updateTaskList(getVisibleChatTasks, renameVectorTask, removeVectorTask, toggleGlobalVectorTask),
     analyzeTaskOverlap: analyzeTaskOverlap,
 
     // UI更新

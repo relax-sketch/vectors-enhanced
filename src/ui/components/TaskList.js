@@ -51,7 +51,7 @@ function getAllAvailableFiles() {
 /**
  * Updates the task list UI
  */
-export async function updateTaskList(getChatTasks, renameVectorTask, removeVectorTask) {
+export async function updateTaskList(getChatTasks, renameVectorTask, removeVectorTask, toggleGlobalVectorTask) {
   const chatId = getCurrentChatId();
   if (!chatId) return;
 
@@ -66,6 +66,8 @@ export async function updateTaskList(getChatTasks, renameVectorTask, removeVecto
 
   tasks.forEach((task, index) => {
     const taskDiv = $('<div class="vector-enhanced-task-item"></div>');
+
+    const ownerChatId = task.ownerChatId || chatId;
 
     // Generate smart task name if actualProcessedItems is available and no custom name
     let displayName = task.name;
@@ -127,6 +129,10 @@ export async function updateTaskList(getChatTasks, renameVectorTask, removeVecto
       }
     }
 
+    if (task.global === true) {
+      displayName = `${displayName} <span style="color: #4dabf7; font-weight: 600;">[全局]</span>`;
+    }
+
     const checkbox = $(`
             <label class="checkbox_label ${taskClass}">
                 <input type="checkbox" ${task.enabled ? 'checked' : ''} />
@@ -136,6 +142,7 @@ export async function updateTaskList(getChatTasks, renameVectorTask, removeVecto
                         <small class="task-info"> - ${new Date(task.timestamp).toLocaleString('zh-CN')}</small>
                     </div>
                     ${task.type === 'external' ? '<span class="external-task-badge" title="外挂任务">🔗</span>' : ''}
+                    ${task.isGlobalFromOtherChat ? '<span class="external-task-badge" title="来自其他聊天的全局任务"><i class="fa-solid fa-globe"></i></span>' : ''}
                 </div>
             </label>
         `);
@@ -159,7 +166,18 @@ export async function updateTaskList(getChatTasks, renameVectorTask, removeVecto
         </button>`);
 
     renameBtn.on('click', async () => {
-      await renameVectorTask(chatId, task.taskId, task.name);
+      await renameVectorTask(ownerChatId, task.taskId, task.name);
+    });
+
+    const globalBtn = $(`<button class="menu_button menu_button_icon" title="${task.global ? '取消全局任务' : '设为全局任务'}">
+            <i class="fa-solid fa-globe"></i>
+        </button>`);
+
+    globalBtn.on('click', async () => {
+      if (typeof toggleGlobalVectorTask === 'function') {
+        await toggleGlobalVectorTask(ownerChatId, task.taskId, !task.global);
+        await updateTaskList(getChatTasks, renameVectorTask, removeVectorTask, toggleGlobalVectorTask);
+      }
     });
 
     const deleteBtn = $(`<button class="menu_button menu_button_icon" title="删除此任务">
@@ -169,8 +187,8 @@ export async function updateTaskList(getChatTasks, renameVectorTask, removeVecto
     deleteBtn.on('click', async () => {
       const confirm = await callGenericPopup('确定要删除这个向量化任务吗？', POPUP_TYPE.CONFIRM);
       if (confirm === POPUP_RESULT.AFFIRMATIVE) {
-        await removeVectorTask(chatId, task.taskId);
-        await updateTaskList(getChatTasks, renameVectorTask, removeVectorTask);
+        await removeVectorTask(ownerChatId, task.taskId);
+        await updateTaskList(getChatTasks, renameVectorTask, removeVectorTask, toggleGlobalVectorTask);
         toastr.success('任务已删除');
       }
     });
@@ -178,6 +196,9 @@ export async function updateTaskList(getChatTasks, renameVectorTask, removeVecto
     const buttonGroup = $('<div class="button-group"></div>');
     buttonGroup.append(previewBtn);
     buttonGroup.append(renameBtn);
+    if (typeof toggleGlobalVectorTask === 'function') {
+      buttonGroup.append(globalBtn);
+    }
     buttonGroup.append(deleteBtn);
 
     taskDiv.append(checkbox);
