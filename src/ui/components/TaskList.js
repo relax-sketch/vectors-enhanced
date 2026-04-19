@@ -118,8 +118,8 @@ export async function updateTaskList(getChatTasks, renameVectorTask, removeVecto
       taskClass = 'external-task';
 
       // 检查源是否存在
-      if (task.source) {
-        const [sourceChat] = task.source.split('_');
+      if (task.source || task.sourceChat) {
+        const sourceChat = task.sourceChat || task.source?.substring(0, task.source.lastIndexOf('_'));
         if (!settings.vector_tasks[sourceChat]) {
           displayName = `<span class="orphaned-task">源数据已删除</span>`;
           taskClass += ' orphaned';
