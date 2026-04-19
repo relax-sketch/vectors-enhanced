@@ -363,7 +363,7 @@ export class ExternalTaskUI {
                     <label>
                         <input type="checkbox" class="task-checkbox" value="${task.taskId || task.id}">
                         <span class="task-name">${task.name}</span>
-                        <small class="task-info">(${task.textContent?.length || 0} 项)</small>
+                        <small class="task-info">(${this.getTaskItemCount(task)} 项)</small>
                     </label>
                 </div>
             `).join('');
@@ -375,6 +375,56 @@ export class ExternalTaskUI {
             console.error('Failed to load source chat tasks:', error);
             this.showNotification('加载任务失败', 'error');
         }
+    }
+
+    /**
+     * Get a display count for both legacy and v2 vector tasks.
+     * V2 tasks do not keep textContent in settings; text lives in the vector DB.
+     * @param {Object} task - Vector task
+     * @returns {number} Display item count
+     */
+    getTaskItemCount(task) {
+        if (!task) return 0;
+        if (Number.isFinite(task.itemCount)) return task.itemCount;
+        if (Number.isFinite(task.originalItemCount)) return task.originalItemCount;
+        if (Array.isArray(task.textContent)) return task.textContent.length;
+
+        const actual = task.actualProcessedItems;
+        if (actual) {
+            const chat = Array.isArray(actual.chat) ? actual.chat.length : 0;
+            const files = Array.isArray(actual.files) ? actual.files.length : 0;
+            const worldInfo = Array.isArray(actual.world_info) ? actual.world_info.length : 0;
+            return chat + files + worldInfo;
+        }
+
+        return 0;
+    }
+
+    /**
+     * Resolve the active chat at import confirmation time.
+     * The cached chat id can be stale after switching chats.
+     * @returns {string|null} Current chat id
+     */
+    getEffectiveCurrentChatId() {
+        const isValid = (id) => id && id !== 'null' && id !== 'undefined';
+
+        try {
+            const id = getCurrentChatId();
+            if (isValid(id)) return id;
+        } catch (error) {
+            console.error('Failed to get chat ID from getCurrentChatId:', error);
+        }
+
+        if (window.getContext) {
+            try {
+                const context = window.getContext();
+                if (isValid(context?.chatId)) return context.chatId;
+            } catch (error) {
+                console.error('Failed to get chat context:', error);
+            }
+        }
+
+        return isValid(this.currentChatId) ? this.currentChatId : null;
     }
 
     /**
@@ -400,7 +450,7 @@ export class ExternalTaskUI {
             const sourceTasks = this.settings.vector_tasks[sourceChatId] || [];
 
             // 重新获取当前聊天ID以确保准确性
-            let currentChatId = this.currentChatId;
+            let currentChatId = this.getEffectiveCurrentChatId();
 
             // 尝试从不同的源获取当前聊天ID
             if (!currentChatId || currentChatId === 'null' || currentChatId === 'undefined') {
@@ -437,7 +487,10 @@ export class ExternalTaskUI {
                 return;
             }
 
-            const currentTasks = this.settings.vector_tasks[currentChatId] || [];
+            if (!this.settings.vector_tasks[currentChatId]) {
+                this.settings.vector_tasks[currentChatId] = [];
+            }
+            const currentTasks = this.settings.vector_tasks[currentChatId];
             let skippedCount = 0;
 
             for (const taskId of selectedTasks) {
@@ -450,9 +503,13 @@ export class ExternalTaskUI {
                     }
 
                     // 检查是否已存在相同的外挂任务
+                    const sourceCollectionId = `${sourceChatId}_${taskId}`;
                     const alreadyExists = currentTasks.some(t =>
                         t.type === 'external' &&
-                        t.source === `${sourceChatId}_${taskId}`
+                        (
+                            t.source === sourceCollectionId ||
+                            (t.sourceChat === sourceChatId && t.sourceTaskId === taskId)
+                        )
                     );
 
                     if (alreadyExists) {
@@ -466,7 +523,7 @@ export class ExternalTaskUI {
                         taskId: `task_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
                         name: `外挂：${sourceTask.name}`,
                         type: 'external',
-                        source: `${sourceChatId}_${taskId}`,  // 源集合ID
+                        source: sourceCollectionId,  // 源集合ID
                         sourceTaskId: taskId, // 明确记录源任务ID
                         enabled: true,
                         timestamp: Date.now(),
@@ -476,10 +533,7 @@ export class ExternalTaskUI {
                     };
 
                     // 添加到当前聊天的任务列表
-                    if (!this.settings.vector_tasks[currentChatId]) {
-                        this.settings.vector_tasks[currentChatId] = [];
-                    }
-                    this.settings.vector_tasks[currentChatId].push(externalTask);
+                    currentTasks.push(externalTask);
 
                     importedCount++;
                 } catch (error) {
@@ -583,7 +637,7 @@ export class ExternalTaskUI {
                         <strong>源任务ID:</strong> ${task.sourceTaskId}
                     </div>
                     <div class="detail-row">
-                        <strong>内容项数:</strong> ${task.textContent?.length || 0}
+                        <strong>内容项数:</strong> ${this.getTaskItemCount(task)}
                     </div>
                     <div class="detail-row">
                         <strong>创建时间:</strong> ${new Date(task.createdAt).toLocaleString()}
