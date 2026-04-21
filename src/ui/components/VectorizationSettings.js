@@ -313,10 +313,6 @@ export class VectorizationSettings {
 
         this.getEmbeddingConfigFields().forEach(field => {
             if (Object.prototype.hasOwnProperty.call(preset.config || {}, field)) {
-                // Do not erase an existing API key when applying a preset saved without one.
-                if (field === 'vllm_api_key' && !preset.config[field]) {
-                    return;
-                }
                 this.settings[field] = preset.config[field];
             }
         });
