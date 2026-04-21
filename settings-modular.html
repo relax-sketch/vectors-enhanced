@@ -528,6 +528,22 @@
       <details>
         <summary><strong>向量化设置</strong></summary>
 
+        <!-- Embedding Config Presets -->
+        <div class="flex-container flexFlowColumn m-b-1">
+          <label for="vectors_enhanced_embedding_preset_select">嵌入配置预设</label>
+          <div class="flex-container" style="gap: 0.5rem; align-items: center;">
+            <select id="vectors_enhanced_embedding_preset_select" class="text_pole" style="flex: 1;">
+              <option value="">-- 选择已保存配置 --</option>
+            </select>
+            <button id="vectors_enhanced_embedding_preset_save" class="menu_button menu_button_icon" title="保存当前 API 和模型配置">
+              <i class="fa-solid fa-save"></i>
+            </button>
+            <button id="vectors_enhanced_embedding_preset_delete" class="menu_button menu_button_icon" title="删除选中的配置">
+              <i class="fa-solid fa-trash"></i>
+            </button>
+          </div>
+        </div>
+
         <!-- Source Selection -->
         <div class="flex-container flexFlowColumn">
           <label for="vectors_enhanced_source">向量化源</label>

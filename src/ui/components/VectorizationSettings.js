@@ -68,6 +68,8 @@ export class VectorizationSettings {
      * Bind event listeners for vectorization settings
      */
     bindEventListeners() {
+        this.bindEmbeddingPresetListeners();
+
         // Source selection change
         $('#vectors_enhanced_source').on('change', (e) => {
             const newSource = e.target.value;
@@ -98,6 +100,25 @@ export class VectorizationSettings {
         $('#vectors_enhanced_depth').on('input', (e) => this.handleFieldChange('depth', parseInt(e.target.value) || 0));
         $('#vectors_enhanced_depth_role').on('change', (e) => this.handleFieldChange('depth_role', parseInt(e.target.value) || 0));
         $('#vectors_enhanced_include_wi').on('change', (e) => this.handleFieldChange('include_wi', e.target.checked));
+    }
+
+    /**
+     * Bind embedding API/model preset controls.
+     */
+    bindEmbeddingPresetListeners() {
+        $('#vectors_enhanced_embedding_preset_select').on('change', (e) => {
+            this.applyEmbeddingPreset(e.target.value);
+        });
+
+        $('#vectors_enhanced_embedding_preset_save').on('click', async (e) => {
+            e.preventDefault();
+            await this.saveCurrentEmbeddingPreset();
+        });
+
+        $('#vectors_enhanced_embedding_preset_delete').on('click', (e) => {
+            e.preventDefault();
+            this.deleteSelectedEmbeddingPreset();
+        });
     }
 
     /**
@@ -186,6 +207,159 @@ export class VectorizationSettings {
 
         // Notify settings change
         this.onSettingsChange('source', newSource);
+    }
+
+    /**
+     * Fields that belong to embedding connection/model configuration only.
+     * Chunking, thresholds and query settings are intentionally excluded.
+     */
+    getEmbeddingConfigFields() {
+        return [
+            'source',
+            'local_model',
+            'vllm_url',
+            'vllm_model',
+            'vllm_api_key',
+            'ollama_url',
+            'ollama_model',
+            'ollama_keep'
+        ];
+    }
+
+    /**
+     * Build a preset object from current embedding API/model settings.
+     */
+    buildCurrentEmbeddingPreset(name) {
+        const preset = {
+            id: `preset_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+            name,
+            createdAt: Date.now(),
+            config: {}
+        };
+
+        this.getEmbeddingConfigFields().forEach(field => {
+            preset.config[field] = this.settings[field];
+        });
+
+        return preset;
+    }
+
+    /**
+     * Render embedding preset dropdown.
+     */
+    renderEmbeddingPresetOptions() {
+        const select = $('#vectors_enhanced_embedding_preset_select');
+        if (!select.length) return;
+
+        const presets = Array.isArray(this.settings.embedding_config_presets)
+            ? this.settings.embedding_config_presets
+            : [];
+
+        const currentValue = select.val();
+        select.empty();
+        select.append('<option value="">-- 选择已保存配置 --</option>');
+        presets.forEach(preset => {
+            select.append($('<option></option>').val(preset.id).text(preset.name));
+        });
+
+        if (currentValue && presets.some(preset => preset.id === currentValue)) {
+            select.val(currentValue);
+        }
+    }
+
+    /**
+     * Save current embedding API/model fields as a named preset.
+     */
+    async saveCurrentEmbeddingPreset() {
+        const defaultName = this.getDefaultEmbeddingPresetName();
+        let name = window.prompt('请输入嵌入配置名称', defaultName);
+        if (!name || !name.trim()) return;
+        name = name.trim();
+
+        if (!Array.isArray(this.settings.embedding_config_presets)) {
+            this.settings.embedding_config_presets = [];
+        }
+
+        const existingIndex = this.settings.embedding_config_presets.findIndex(preset => preset.name === name);
+        const preset = this.buildCurrentEmbeddingPreset(name);
+
+        if (existingIndex >= 0) {
+            preset.id = this.settings.embedding_config_presets[existingIndex].id;
+            preset.createdAt = this.settings.embedding_config_presets[existingIndex].createdAt || preset.createdAt;
+            preset.updatedAt = Date.now();
+            this.settings.embedding_config_presets[existingIndex] = preset;
+        } else {
+            this.settings.embedding_config_presets.push(preset);
+        }
+
+        this.saveSettings();
+        this.renderEmbeddingPresetOptions();
+        $('#vectors_enhanced_embedding_preset_select').val(preset.id);
+        this.onSettingsChange('embedding_config_presets', this.settings.embedding_config_presets);
+        window.toastr?.success?.('嵌入配置已保存');
+    }
+
+    /**
+     * Apply a saved embedding preset to current settings and UI.
+     */
+    applyEmbeddingPreset(presetId) {
+        if (!presetId) return;
+
+        const presets = Array.isArray(this.settings.embedding_config_presets)
+            ? this.settings.embedding_config_presets
+            : [];
+        const preset = presets.find(item => item.id === presetId);
+        if (!preset) return;
+
+        this.getEmbeddingConfigFields().forEach(field => {
+            if (Object.prototype.hasOwnProperty.call(preset.config || {}, field)) {
+                this.settings[field] = preset.config[field];
+            }
+        });
+
+        this.saveSettings();
+        this.loadCurrentSettings();
+        this.updateSourceVisibility();
+        this.onSettingsChange('embedding_config_preset_applied', preset.name);
+        window.toastr?.success?.(`已切换嵌入配置：${preset.name}`);
+    }
+
+    /**
+     * Delete the selected embedding preset.
+     */
+    deleteSelectedEmbeddingPreset() {
+        const select = $('#vectors_enhanced_embedding_preset_select');
+        const presetId = select.val();
+        if (!presetId) return;
+
+        const presets = Array.isArray(this.settings.embedding_config_presets)
+            ? this.settings.embedding_config_presets
+            : [];
+        const preset = presets.find(item => item.id === presetId);
+        if (!preset) return;
+
+        if (!window.confirm(`删除嵌入配置“${preset.name}”？`)) return;
+
+        this.settings.embedding_config_presets = presets.filter(item => item.id !== presetId);
+        this.saveSettings();
+        this.renderEmbeddingPresetOptions();
+        select.val('');
+        this.onSettingsChange('embedding_config_presets', this.settings.embedding_config_presets);
+        window.toastr?.success?.('嵌入配置已删除');
+    }
+
+    /**
+     * Generate a readable default preset name from current source and model.
+     */
+    getDefaultEmbeddingPresetName() {
+        const source = this.settings.source || 'embedding';
+        const model = source === 'vllm'
+            ? this.settings.vllm_model
+            : source === 'ollama'
+                ? this.settings.ollama_model
+                : this.settings.local_model;
+
+        return model ? `${source} - ${model}` : source;
     }
 
     /**
@@ -282,6 +456,7 @@ export class VectorizationSettings {
 
         // Load source selection
         $('#vectors_enhanced_source').val(this.settings.source);
+        this.renderEmbeddingPresetOptions();
 
         // Load source-specific fields
         Object.entries(this.sourceConfigs).forEach(([source, config]) => {
@@ -462,6 +637,10 @@ export class VectorizationSettings {
      */
     destroy() {
         console.log('VectorizationSettings: Destroying...');
+
+        $('#vectors_enhanced_embedding_preset_select').off('change');
+        $('#vectors_enhanced_embedding_preset_save').off('click');
+        $('#vectors_enhanced_embedding_preset_delete').off('click');
 
         // Remove event listeners
         $('#vectors_enhanced_source').off('change');

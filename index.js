@@ -122,6 +122,7 @@ const settings = {
   ollama_model: 'rjmalagon/gte-qwen2-1.5b-instruct-embed-f16',
   ollama_url: '', // ollama API地址
   ollama_keep: false,
+  embedding_config_presets: [], // Saved embedding API/model presets
 
   // General vectorization settings
   chunk_size: 768,
@@ -3460,6 +3461,9 @@ jQuery(async () => {
   // 确保 vllm_api_key 存在
   if (settings.vllm_api_key === undefined) {
     settings.vllm_api_key = '';
+  }
+  if (!Array.isArray(settings.embedding_config_presets)) {
+    settings.embedding_config_presets = [];
   }
 
   // 保存修正后的设置 - 使用深度合并而不是浅拷贝
