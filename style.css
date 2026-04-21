@@ -585,6 +585,24 @@
     flex-shrink: 0; /* 按钮组不收缩 */
 }
 
+.vector-enhanced-task-item .vectors-task-weight {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-height: 32px;
+    font-size: 0.85em;
+    cursor: default;
+}
+
+.vector-enhanced-task-item .vectors-task-weight input {
+    width: 58px;
+    min-width: 58px;
+    height: 32px;
+    padding: 2px 5px;
+    text-align: center;
+}
+
 .vector-enhanced-task-item button {
     padding: 6px 10px;
     font-size: 0.9em;
