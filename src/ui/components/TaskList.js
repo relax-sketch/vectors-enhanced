@@ -217,8 +217,13 @@ export async function updateTaskList(getChatTasks, renameVectorTask, removeVecto
     }
     buttonGroup.append(deleteBtn);
 
-    taskDiv.append(checkbox);
-    taskDiv.append(buttonGroup);
+    const taskMainRow = $('<div class="task-main-row"></div>');
+    const taskControlsRow = $('<div class="task-controls-row"></div>');
+
+    taskMainRow.append(checkbox);
+    taskControlsRow.append(buttonGroup);
+    taskDiv.append(taskMainRow);
+    taskDiv.append(taskControlsRow);
     taskList.append(taskDiv);
   });
 }
