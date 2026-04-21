@@ -153,21 +153,6 @@ export async function updateTaskList(getChatTasks, renameVectorTask, removeVecto
       saveSettingsDebounced();
     });
 
-    const weightControl = $(`
-        <label class="vectors-task-weight" title="检索权重。未启用 Rerank 时，最大结果数会按各任务权重比例分配。0 表示不检索此任务。">
-            <span>权重</span>
-            <input type="number" class="text_pole" min="0" max="100" step="0.1" value="${Number(task.vectorQueryWeight ?? 1)}" />
-        </label>
-    `);
-
-    weightControl.find('input').on('change input', function () {
-      const value = Math.max(0, parseFloat(this.value) || 0);
-      task.vectorQueryWeight = value;
-      this.value = value;
-      Object.assign(extension_settings.vectors_enhanced, settings);
-      saveSettingsDebounced();
-    });
-
     const previewBtn = $(`<button class="menu_button menu_button_icon" title="预览此任务内容">
             <i class="fa-solid fa-eye"></i>
         </button>`);
@@ -209,7 +194,6 @@ export async function updateTaskList(getChatTasks, renameVectorTask, removeVecto
     });
 
     const buttonGroup = $('<div class="button-group"></div>');
-    buttonGroup.append(weightControl);
     buttonGroup.append(previewBtn);
     buttonGroup.append(renameBtn);
     if (typeof toggleGlobalVectorTask === 'function') {
