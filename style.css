@@ -556,13 +556,29 @@
 
 .vector-enhanced-task-item {
     display: flex;
-    align-items: center;
+    flex-direction: column;
+    align-items: stretch;
     padding: 8px;
     margin-bottom: 5px;
     background: var(--SmartThemeBlurTintColor);
     border-radius: 5px;
     gap: 10px;
     min-height: 40px;
+}
+
+.vector-enhanced-task-item .task-main-row,
+.vector-enhanced-task-item .task-controls-row {
+    width: 100%;
+    display: flex;
+    align-items: center;
+}
+
+.vector-enhanced-task-item .task-main-row {
+    min-width: 0;
+}
+
+.vector-enhanced-task-item .task-controls-row {
+    justify-content: flex-end;
 }
 
 .vector-enhanced-task-item:last-child {
@@ -582,7 +598,10 @@
 .vector-enhanced-task-item .button-group {
     display: flex;
     gap: 5px;
-    flex-shrink: 0; /* 按钮组不收缩 */
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    flex-shrink: 1;
+    max-width: 100%;
 }
 
 .vector-enhanced-task-item .vectors-task-weight {
@@ -596,8 +615,8 @@
 }
 
 .vector-enhanced-task-item .vectors-task-weight input {
-    width: 58px;
-    min-width: 58px;
+    width: 64px;
+    min-width: 64px;
     height: 32px;
     padding: 2px 5px;
     text-align: center;
