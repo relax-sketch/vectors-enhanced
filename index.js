@@ -417,6 +417,69 @@ function getVisibleChatTasks(chatId) {
 }
 
 /**
+ * Allocates a fixed query result budget across tasks by their configured weights.
+ * Tasks with weight <= 0 are skipped. If there are more positive-weight tasks than
+ * available slots, the highest-weight tasks receive the available slots.
+ * @param {Array<Object>} tasks Enabled vector tasks
+ * @param {number} totalLimit Total result budget
+ * @returns {Map<string, number>} taskId -> query limit
+ */
+function calculateWeightedTaskLimits(tasks, totalLimit) {
+  const limit = Math.max(0, Math.floor(Number(totalLimit) || 0));
+  const allocations = new Map(tasks.map(task => [task.taskId, 0]));
+  if (limit <= 0 || !Array.isArray(tasks) || tasks.length === 0) {
+    return allocations;
+  }
+
+  const weightedTasks = tasks
+    .map((task, index) => ({
+      task,
+      index,
+      weight: Math.max(0, Number(task.vectorQueryWeight ?? 1) || 0),
+    }))
+    .filter(item => item.weight > 0);
+
+  if (weightedTasks.length === 0) {
+    return allocations;
+  }
+
+  const totalWeight = weightedTasks.reduce((sum, item) => sum + item.weight, 0);
+  let assigned = 0;
+  const shares = weightedTasks.map(item => {
+    const raw = (limit * item.weight) / totalWeight;
+    const base = Math.floor(raw);
+    assigned += base;
+    return {
+      ...item,
+      base,
+      remainder: raw - base,
+    };
+  });
+
+  let remaining = limit - assigned;
+  shares
+    .sort((a, b) => (b.remainder - a.remainder) || (b.weight - a.weight) || (a.index - b.index))
+    .forEach(item => {
+      if (remaining <= 0) return;
+      item.base += 1;
+      remaining -= 1;
+    });
+
+  shares.forEach(item => {
+    allocations.set(item.task.taskId, item.base);
+  });
+
+  console.debug('Vectors: Weighted task query limits:', shares.map(item => ({
+    task: item.task.name,
+    taskId: item.task.taskId,
+    weight: item.weight,
+    limit: item.base,
+  })));
+
+  return allocations;
+}
+
+/**
  * Adds a new vector task
  * @param {string} chatId Chat ID
  * @param {object} task Task object
@@ -2616,9 +2679,19 @@ async function rearrangeChat(chat, contextSize, abort, type) {
     // Query all enabled tasks
     let allResults = [];
     // 为了确保能从所有任务中获得最相关的结果，每个任务查询稍多一些
-    const perTaskLimit = Math.max(Math.ceil((settings.max_results || 10) * 1.5), 20);
+    const maxResults = settings.max_results || 10;
+    const rerankEnabled = rerankService && rerankService.isEnabled();
+    const taskQueryLimits = rerankEnabled
+      ? new Map(tasks.map(task => [task.taskId, Math.max(Math.ceil(maxResults * 1.5), 20)]))
+      : calculateWeightedTaskLimits(tasks, maxResults);
 
     for (const task of tasks) {
+      const taskLimit = taskQueryLimits.get(task.taskId) || 0;
+      if (taskLimit <= 0) {
+        console.debug(`Vectors: Skipping task "${task.name}" because weighted query limit is 0`);
+        continue;
+      }
+
       // 支持外挂任务：如果任务有 type 和 source 字段，使用源集合ID
       let collectionId;
       if (task.type === 'external' && task.source) {
@@ -2630,7 +2703,7 @@ async function rearrangeChat(chat, contextSize, abort, type) {
       }
 
       try {
-        const results = await storageAdapter.queryCollection(collectionId, queryText, perTaskLimit, settings.score_threshold);
+        const results = await storageAdapter.queryCollection(collectionId, queryText, taskLimit, settings.score_threshold);
         console.debug(`Vectors: Query results for task ${task.name}:`, results);
         console.debug(`Vectors: Result structure - has items: ${!!results?.items}, has hashes: ${!!results?.hashes}, has distances: ${!!results?.distances}, has similarities: ${!!results?.similarities}`);
 
