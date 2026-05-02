@@ -3322,16 +3322,6 @@ async function queryForPrompt(options = {}) {
   }
 
   let queryText = String(options.queryText || '').trim();
-  if (!queryText && options.queryMessages) {
-    const context = getContext();
-    const chat = Array.isArray(context?.chat) ? context.chat : [];
-    const queryMessages = Math.min(Math.max(1, Number(options.queryMessages) || settings.query_messages || 3), chat.length);
-    queryText = chat
-      .slice(-queryMessages)
-      .map(x => x.mes)
-      .join('\n')
-      .trim();
-  }
   if (!queryText) return { text: '', rawText: '', results: [], stats: { reason: 'empty_query' } };
 
   const instructionEnabled = options.queryInstructionEnabled ?? settings.query_instruction_enabled;
@@ -3400,11 +3390,6 @@ async function queryForPrompt(options = {}) {
       taskCount: tasks.length,
       rerankApplied,
       queryInstructionEnabled: !!(instructionEnabled && instruction),
-      queryMessages: Number(options.queryMessages ?? settings.query_messages ?? 3) || 3,
-      chunkSize: Number(options.chunkSize ?? settings.chunk_size ?? 768) || 768,
-      overlapPercent: Number(options.overlapPercent ?? settings.overlap_percent ?? 0) || 0,
-      scorePreset: options.scorePreset || 'custom',
-      scoreThreshold,
       source: settings.source,
     },
   };
