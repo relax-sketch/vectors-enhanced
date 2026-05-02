@@ -3156,6 +3156,251 @@ function getLastInjectedContent() {
 
 window['vectors_getLastInjectedContent'] = getLastInjectedContent;
 
+function getTaskCollectionId(task, currentChatId) {
+  if (task?.type === 'external' && task?.source) return task.source;
+  return `${task?.ownerChatId || currentChatId}_${task?.taskId}`;
+}
+
+function getPlannerTaskRef(task, currentChatId) {
+  return `${task?.ownerChatId || currentChatId}::${task?.taskId}`;
+}
+
+function formatPlannerQueryResults(results) {
+  const groupedResults = {};
+  for (const result of results || []) {
+    const type = result.metadata?.type || 'unknown';
+    if (!groupedResults[type]) groupedResults[type] = [];
+    groupedResults[type].push(result);
+  }
+
+  Object.keys(groupedResults).forEach(type => {
+    groupedResults[type].sort((a, b) => {
+      const aTaskId = a.metadata?.taskId || '';
+      const bTaskId = b.metadata?.taskId || '';
+      if (aTaskId !== bTaskId) return aTaskId.localeCompare(bTaskId);
+
+      const aDecoded = decodeMetadataFromText(a.text);
+      const bDecoded = decodeMetadataFromText(b.text);
+      const aIndex = aDecoded.metadata.originalIndex ?? a.metadata?.originalIndex ?? a.metadata?.index ?? 0;
+      const bIndex = bDecoded.metadata.originalIndex ?? b.metadata?.originalIndex ?? b.metadata?.index ?? 0;
+
+      if (type === 'world_info') {
+        const aEntry = aDecoded.metadata.entry || '';
+        const bEntry = bDecoded.metadata.entry || '';
+        const aChunkMatch = a.text.match(/chunk=(\d+)\/\d+/);
+        const bChunkMatch = b.text.match(/chunk=(\d+)\/\d+/);
+        const aChunkNum = aChunkMatch ? parseInt(aChunkMatch[1], 10) : 0;
+        const bChunkNum = bChunkMatch ? parseInt(bChunkMatch[1], 10) : 0;
+        if (aEntry === bEntry && aEntry !== '') return aChunkNum - bChunkNum;
+        return bIndex - aIndex;
+      }
+
+      return aIndex - bIndex;
+    });
+  });
+
+  const formattedParts = [];
+  if (groupedResults.world_info?.length) {
+    const tag = settings.content_tags?.world_info || 'world_part';
+    formattedParts.push(`<${tag}>\n${groupedResults.world_info.map(m => m.text).filter(onlyUnique).join('\n\n')}\n</${tag}>`);
+  }
+  if (groupedResults.file?.length) {
+    const tag = settings.content_tags?.file || 'databank';
+    formattedParts.push(`<${tag}>\n${groupedResults.file.map(m => m.text).filter(onlyUnique).join('\n\n')}\n</${tag}>`);
+  }
+  if (groupedResults.chat?.length) {
+    const tag = settings.content_tags?.chat || 'past_chat';
+    formattedParts.push(`<${tag}>\n${groupedResults.chat.map(m => m.text).filter(onlyUnique).join('\n\n')}\n</${tag}>`);
+  }
+  if (groupedResults.unknown?.length) {
+    formattedParts.push(`<context>\n${groupedResults.unknown.map(m => m.text).filter(onlyUnique).join('\n\n')}\n</context>`);
+  }
+
+  return { text: formattedParts.join('\n\n'), groupedResults };
+}
+
+function collectTextResultsFromVectorResponse(results, task, collectionId) {
+  const out = [];
+  if (!results) return out;
+
+  if (results.metadata && Array.isArray(results.metadata)) {
+    results.metadata.forEach((meta, index) => {
+      if (!meta.text) return;
+      let score = 0;
+      if (meta.score !== undefined) score = meta.score;
+      else if (results.distances?.[index] !== undefined) score = 1 / (1 + results.distances[index]);
+      else if (results.similarities?.[index] !== undefined) score = results.similarities[index];
+      out.push({
+        text: meta.text,
+        score,
+        metadata: {
+          ...meta,
+          taskName: task.name,
+          taskId: task.taskId,
+          taskRef: getPlannerTaskRef(task, task.ownerChatId),
+          collectionId,
+          type: meta.decodedType || meta.type,
+          originalIndex: meta.decodedOriginalIndex !== undefined ? meta.decodedOriginalIndex : meta.originalIndex,
+        },
+      });
+    });
+    return out;
+  }
+
+  if (results.items && Array.isArray(results.items)) {
+    results.items.forEach((item, index) => {
+      if (!item.text) return;
+      let score = 0;
+      if (item.score !== undefined) score = item.score;
+      else if (results.distances?.[index] !== undefined) score = 1 / (1 + results.distances[index]);
+      else if (results.similarities?.[index] !== undefined) score = results.similarities[index];
+      out.push({
+        text: item.text,
+        score,
+        metadata: {
+          ...(item.metadata || {}),
+          taskName: task.name,
+          taskId: task.taskId,
+          taskRef: getPlannerTaskRef(task, task.ownerChatId),
+          collectionId,
+          type: item.metadata?.decodedType || item.metadata?.type,
+          originalIndex: item.metadata?.decodedOriginalIndex !== undefined ? item.metadata?.decodedOriginalIndex : item.metadata?.originalIndex,
+        },
+      });
+    });
+    return out;
+  }
+
+  if (results.hashes && task.textContent && Array.isArray(task.textContent)) {
+    results.hashes.forEach((hash, index) => {
+      const textItem = task.textContent.find(item => item.hash === hash);
+      if (!textItem?.text) return;
+      out.push({
+        text: textItem.text,
+        score: results.metadata?.[index]?.score || 0,
+        metadata: {
+          ...textItem.metadata,
+          ...(results.metadata?.[index] || {}),
+          taskName: task.name,
+          taskId: task.taskId,
+          taskRef: getPlannerTaskRef(task, task.ownerChatId),
+          collectionId,
+        },
+      });
+    });
+  }
+
+  return out;
+}
+
+function getPlannerTaskOptions(chatId = getCurrentChatId()) {
+  if (!chatId || chatId === 'null' || chatId === 'undefined') return [];
+  return getVisibleChatTasks(chatId).map(task => {
+    const collectionId = getTaskCollectionId(task, chatId);
+    return {
+      ref: getPlannerTaskRef(task, chatId),
+      taskId: task.taskId,
+      collectionId,
+      name: task.name || task.taskId || collectionId,
+      enabled: !!task.enabled,
+      global: !!task.global,
+      external: task.type === 'external',
+      orphaned: !!task.orphaned,
+      ownerChatId: task.ownerChatId || chatId,
+      weight: Number(task.vectorQueryWeight ?? 1) || 0,
+    };
+  });
+}
+
+async function queryForPrompt(options = {}) {
+  if (!storageAdapter) throw new Error('Vectors Enhanced storage is not ready');
+  if (!settings.master_enabled) return { text: '', rawText: '', results: [], stats: { reason: 'master_disabled' } };
+
+  const chatId = options.chatId || getCurrentChatId();
+  if (!chatId || chatId === 'null' || chatId === 'undefined') {
+    return { text: '', rawText: '', results: [], stats: { reason: 'no_chat_id' } };
+  }
+
+  let queryText = String(options.queryText || '').trim();
+  if (!queryText) return { text: '', rawText: '', results: [], stats: { reason: 'empty_query' } };
+
+  const instructionEnabled = options.queryInstructionEnabled ?? settings.query_instruction_enabled;
+  const instruction = String(options.queryInstruction || settings.query_instruction_template || '').trim();
+  if (instructionEnabled && instruction) {
+    queryText = `Instruct: ${instruction}\nQuery:${queryText}`;
+  }
+
+  const selectedRefs = new Set((options.selectedTaskRefs || []).filter(Boolean));
+  const selectedTaskIds = new Set((options.selectedTaskIds || []).filter(Boolean));
+  let tasks = getVisibleChatTasks(chatId).filter(task => options.includeDisabled ? true : task.enabled);
+  if (selectedRefs.size || selectedTaskIds.size) {
+    tasks = tasks.filter(task => selectedRefs.has(getPlannerTaskRef(task, chatId)) || selectedTaskIds.has(task.taskId));
+  }
+
+  if (!tasks.length) return { text: '', rawText: '', results: [], stats: { reason: 'no_tasks' } };
+
+  const maxResults = Math.max(1, Math.min(100, Math.floor(Number(options.maxResults ?? settings.max_results ?? 10) || 10)));
+  const scoreThreshold = Number.isFinite(Number(options.scoreThreshold))
+    ? Number(options.scoreThreshold)
+    : Number(settings.score_threshold || 0.25);
+  const useRerank = options.useRerank ?? true;
+  const taskQueryLimits = (useRerank && rerankService?.isEnabled?.())
+    ? new Map(tasks.map(task => [task.taskId, Math.max(Math.ceil(maxResults * 1.5), 20)]))
+    : calculateWeightedTaskLimits(tasks, maxResults);
+
+  let allResults = [];
+  for (const task of tasks) {
+    const taskLimit = taskQueryLimits.get(task.taskId) || 0;
+    if (taskLimit <= 0) continue;
+
+    const collectionId = getTaskCollectionId(task, chatId);
+    try {
+      const results = await storageAdapter.queryCollection(collectionId, queryText, taskLimit, scoreThreshold);
+      allResults.push(...collectTextResultsFromVectorResponse(results, task, collectionId));
+    } catch (error) {
+      console.warn(`[Vectors] Planner query failed for task "${task.name}":`, error);
+    }
+  }
+
+  const originalQueryCount = allResults.length;
+  let rerankApplied = false;
+  if (useRerank && rerankService?.isEnabled?.() && allResults.length > 0) {
+    allResults = await rerankService.rerankResults(queryText, allResults);
+    rerankApplied = true;
+    allResults = rerankService.limitResults(allResults, maxResults);
+  } else {
+    allResults.sort((a, b) => (b.score || 0) - (a.score || 0));
+    allResults = allResults.slice(0, maxResults);
+  }
+
+  const { text: rawText, groupedResults } = formatPlannerQueryResults(allResults);
+  const template = String(options.template ?? '{{text}}');
+  const text = rawText.trim()
+    ? substituteParamsExtended(template, { text: rawText }).replaceAll('{{text}}', rawText)
+    : '';
+
+  return {
+    text,
+    rawText,
+    results: allResults,
+    groupedResults,
+    stats: {
+      originalQueryCount,
+      finalCount: allResults.length,
+      taskCount: tasks.length,
+      rerankApplied,
+      queryInstructionEnabled: !!(instructionEnabled && instruction),
+      source: settings.source,
+    },
+  };
+}
+
+window.VectorsEnhanced = window.VectorsEnhanced || {};
+Object.assign(window.VectorsEnhanced, {
+  getPlannerTaskOptions,
+  queryForPrompt,
+});
+
 
 
 
