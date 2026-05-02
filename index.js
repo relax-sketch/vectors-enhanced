@@ -3349,6 +3349,7 @@ async function queryForPrompt(options = {}) {
     : calculateWeightedTaskLimits(tasks, maxResults);
 
   let allResults = [];
+  const taskErrors = [];
   for (const task of tasks) {
     const taskLimit = taskQueryLimits.get(task.taskId) || 0;
     if (taskLimit <= 0) continue;
@@ -3358,6 +3359,12 @@ async function queryForPrompt(options = {}) {
       const results = await storageAdapter.queryCollection(collectionId, queryText, taskLimit, scoreThreshold);
       allResults.push(...collectTextResultsFromVectorResponse(results, task, collectionId));
     } catch (error) {
+      taskErrors.push({
+        taskName: task.name || task.taskId,
+        taskId: task.taskId,
+        collectionId,
+        message: String(error?.message || error),
+      });
       console.warn(`[Vectors] Planner query failed for task "${task.name}":`, error);
     }
   }
@@ -3388,6 +3395,7 @@ async function queryForPrompt(options = {}) {
       originalQueryCount,
       finalCount: allResults.length,
       taskCount: tasks.length,
+      taskErrors,
       rerankApplied,
       queryInstructionEnabled: !!(instructionEnabled && instruction),
       source: settings.source,
@@ -3395,10 +3403,98 @@ async function queryForPrompt(options = {}) {
   };
 }
 
+async function diagnosePlannerQuery(options = {}) {
+  const lines = [];
+  const push = (text = '') => lines.push(String(text));
+  const chatId = options.chatId || getCurrentChatId();
+  const taskOptions = getPlannerTaskOptions(chatId);
+  const selectedRefs = Array.isArray(options.selectedTaskRefs) ? options.selectedTaskRefs.filter(Boolean) : [];
+  const selectedSet = new Set(selectedRefs);
+
+  push('=== Vectors Enhanced 诊断 ===');
+  push(`时间: ${new Date().toLocaleString()}`);
+  push(`当前聊天ID: ${chatId || '(无)'}`);
+  push(`主开关 master_enabled: ${settings.master_enabled ? '开启' : '关闭'}`);
+  push(`向量查询 enabled: ${settings.enabled ? '开启' : '关闭'}`);
+  push(`向量源 source: ${settings.source || '(未设置)'}`);
+  push(`storageAdapter: ${storageAdapter ? '已初始化' : '未初始化'}`);
+  push(`rerank: ${rerankService?.isEnabled?.() ? '开启' : '关闭'}`);
+  push(`默认 max_results: ${settings.max_results}`);
+  push(`默认 score_threshold: ${settings.score_threshold}`);
+  push(`默认 query_messages: ${settings.query_messages}`);
+  push('');
+
+  if (!window.VectorsEnhanced?.queryForPrompt) push('!! queryForPrompt 未挂载');
+  if (!storageAdapter) push('!! storageAdapter 未初始化，无法查询向量库');
+  if (!settings.master_enabled) push('!! vectors-enhanced 主开关关闭');
+  if (!settings.enabled) push('!! vectors-enhanced 查询开关关闭');
+
+  push(`任务总数: ${taskOptions.length}`);
+  if (!taskOptions.length) {
+    push('!! 当前聊天没有可见向量任务。请确认已在 vectors-enhanced 中完成向量化，或已导入外挂任务。');
+  } else {
+    for (const task of taskOptions) {
+      const selectedMark = selectedSet.size ? (selectedSet.has(task.ref) ? '选中' : '未选') : '默认候选';
+      push(`- ${task.name} [${selectedMark}]`);
+      push(`  ref=${task.ref}`);
+      push(`  collection=${task.collectionId}`);
+      push(`  enabled=${task.enabled} global=${task.global} external=${task.external} orphaned=${task.orphaned}`);
+    }
+  }
+
+  const enabledTasks = taskOptions.filter(task => task.enabled && (!selectedSet.size || selectedSet.has(task.ref)));
+  push('');
+  push(`本次会查询任务数: ${enabledTasks.length}`);
+  if (!enabledTasks.length && taskOptions.length) {
+    push('!! 没有可查询任务：可能选中的任务未启用，或当前没有启用任务。');
+  }
+
+  const testQuery = String(options.queryText || '').trim() || '测试剧情规划向量知识库召回';
+  push(`测试查询: ${testQuery.slice(0, 300)}`);
+
+  try {
+    const result = await queryForPrompt({
+      ...options,
+      queryText: testQuery,
+      maxResults: Math.max(1, Math.min(20, Number(options.maxResults || settings.max_results || 10))),
+      template: '{{text}}',
+    });
+    push('');
+    push('=== 测试查询结果 ===');
+    push(`原始命中块数: ${result?.stats?.originalQueryCount ?? 0}`);
+    push(`最终返回块数: ${result?.stats?.finalCount ?? 0}`);
+    push(`查询任务数: ${result?.stats?.taskCount ?? 0}`);
+    push(`rerankApplied: ${result?.stats?.rerankApplied ? '是' : '否'}`);
+    push(`返回文本长度: ${String(result?.text || '').length}`);
+    if (Array.isArray(result?.stats?.taskErrors) && result.stats.taskErrors.length) {
+      push('');
+      push('=== 任务查询错误 ===');
+      result.stats.taskErrors.forEach(err => {
+        push(`- ${err.taskName} (${err.collectionId}): ${err.message}`);
+      });
+    }
+    if (!result?.text) {
+      push('');
+      push('!! 查询没有返回文本。常见原因：阈值太高、任务未启用、collectionId 对不上、向量模型/源配置不一致、向量文件不存在。');
+    } else {
+      push('');
+      push('=== 返回内容预览 ===');
+      push(String(result.text).slice(0, 1200));
+    }
+  } catch (error) {
+    push('');
+    push('=== 测试查询异常 ===');
+    push(String(error?.stack || error?.message || error));
+  }
+
+  return lines.join('\n');
+}
+
 window.VectorsEnhanced = window.VectorsEnhanced || {};
 Object.assign(window.VectorsEnhanced, {
   getPlannerTaskOptions,
   queryForPrompt,
+  diagnosePlannerQuery,
 });
 
 
