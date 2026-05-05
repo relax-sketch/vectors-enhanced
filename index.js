@@ -3313,8 +3313,9 @@ function getPlannerTaskOptions(chatId = getCurrentChatId()) {
 }
 
 async function queryForPrompt(options = {}) {
-  if (!storageAdapter) throw new Error('Vectors Enhanced storage is not ready');
+  if (!storageAdapter) return { text: '', rawText: '', results: [], stats: { reason: 'storage_not_ready' } };
   if (!settings.master_enabled) return { text: '', rawText: '', results: [], stats: { reason: 'master_disabled' } };
+  if (!settings.enabled) return { text: '', rawText: '', results: [], stats: { reason: 'query_disabled' } };
 
   const chatId = options.chatId || getCurrentChatId();
   if (!chatId || chatId === 'null' || chatId === 'undefined') {
@@ -3399,6 +3400,8 @@ async function queryForPrompt(options = {}) {
       rerankApplied,
       queryInstructionEnabled: !!(instructionEnabled && instruction),
       source: settings.source,
+      maxResults,
+      scoreThreshold,
     },
   };
 }
