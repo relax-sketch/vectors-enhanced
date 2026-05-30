@@ -33,8 +33,6 @@ export class VectorizationSettings {
         // Injection-related fields from InjectionSettings.js
         this.injectionFields = [
             'template',
-            'depth',
-            'depth_role',
             'include_wi',
         ];
         this.contentTagFields = ['tag_chat', 'tag_wi', 'tag_file'];
@@ -96,9 +94,6 @@ export class VectorizationSettings {
                 this.onSettingsChange(`content_tags.${key}`, e.target.value);
             });
         });
-        $('input[name="vectors_position"]').on('change', (e) => this.handlePositionChange(e.target.value));
-        $('#vectors_enhanced_depth').on('input', (e) => this.handleFieldChange('depth', parseInt(e.target.value) || 0));
-        $('#vectors_enhanced_depth_role').on('change', (e) => this.handleFieldChange('depth_role', parseInt(e.target.value) || 0));
         $('#vectors_enhanced_include_wi').on('change', (e) => this.handleFieldChange('include_wi', e.target.checked));
     }
 
@@ -182,11 +177,7 @@ export class VectorizationSettings {
      * Handle position selection change (from InjectionSettings)
      */
     handlePositionChange(positionValue) {
-        console.log(`VectorizationSettings: Position changed to ${positionValue}`);
-        this.settings.position = parseInt(positionValue);
-        this.saveSettings();
-        this.updatePositionVisibility();
-        this.onSettingsChange('position', this.settings.position);
+        console.log(`VectorizationSettings: Ignoring legacy position change ${positionValue}`);
     }
 
     /**
@@ -516,9 +507,7 @@ export class VectorizationSettings {
                 element.val(this.settings.content_tags[key]);
             }
         });
-        if (this.settings.position !== undefined) {
-            $(`input[name="vectors_position"][value="${this.settings.position}"]`).prop('checked', true);
-        }
+        this.updateQueryPromptStatus();
     }
 
     /**
@@ -670,14 +659,20 @@ export class VectorizationSettings {
 // Helper methods from InjectionSettings.js
 Object.assign(VectorizationSettings.prototype, {
     updatePositionVisibility() {
-        const position = this.settings.position;
-        const depthControls = $('#vectors_enhanced_depth_controls');
-        if (position === 1) { // at_depth
-            depthControls.show();
+        this.updateQueryPromptStatus();
+    },
+
+    updateQueryPromptStatus() {
+        const status = window.vectors_getQueryPromptManagerStatus?.();
+        const statusEl = $('#vectors_enhanced_query_prompt_status');
+        if (!statusEl.length) return;
+
+        if (status?.exists) {
+            statusEl.text(status.activeEnabled ? 'relative after chatHistory, enabled' : 'relative after chatHistory, disabled');
         } else {
-            depthControls.hide();
+            statusEl.text('preset entry missing');
         }
-        console.log(`VectorizationSettings: Updated position visibility (position: ${position})`);
+        console.log('VectorizationSettings: Updated query prompt status', status);
     },
 
     validateTemplate(template) {

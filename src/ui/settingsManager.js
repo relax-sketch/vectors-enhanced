@@ -578,28 +578,26 @@ export class SettingsManager {
         // 用户手动修改了模板，但保持当前预设选择（允许用户基于预设进行修改）
       });
 
-    // 深度
-    $('#vectors_enhanced_depth')
-      .val(this.settings.depth)
-      .on('input', () => {
-        this.settings.depth = Number($('#vectors_enhanced_depth').val());
-        this.updateAndSave();
-      });
-
-    // 位置
-    $(`input[name="vectors_position"][value="${this.settings.position}"]`).prop('checked', true);
-    $('input[name="vectors_position"]').on('change', () => {
-      this.settings.position = Number($('input[name="vectors_position"]:checked').val());
-      this.updateAndSave();
+    const updateQueryPromptStatus = () => {
+      const status = window.vectors_getQueryPromptManagerStatus?.();
+      const statusEl = $('#vectors_enhanced_query_prompt_status');
+      if (!statusEl.length) return;
+      if (status?.exists) {
+        statusEl.text(status.activeEnabled ? 'relative after chatHistory, enabled' : 'relative after chatHistory, disabled');
+      } else {
+        statusEl.text('preset entry missing');
+      }
+    };
+    $('#vectors_enhanced_repair_query_prompt').on('click', () => {
+      const result = window.vectors_repairQueryPromptManagerEntry?.();
+      updateQueryPromptStatus();
+      if (result?.ok) {
+        toastr?.success?.('Vectors Enhanced Query preset entry is ready.');
+      } else {
+        toastr?.error?.(`Failed to repair preset entry: ${result?.reason || 'unknown error'}`);
+      }
     });
-
-    // 深度角色
-    $('#vectors_enhanced_depth_role')
-      .val(this.settings.depth_role)
-      .on('change', () => {
-        this.settings.depth_role = Number($('#vectors_enhanced_depth_role').val());
-        this.updateAndSave();
-      });
+    updateQueryPromptStatus();
 
     // 包含世界信息
     $('#vectors_enhanced_include_wi')

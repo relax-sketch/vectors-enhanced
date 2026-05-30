@@ -754,26 +754,12 @@
 
             <!-- Injection Position -->
             <label>注入位置</label>
-            <div class="radio_group">
-              <label>
-                <input type="radio" name="vectors_position" value="2" />
-                <span>主提示前</span>
-              </label>
-              <label>
-                <input type="radio" name="vectors_position" value="0" />
-                <span>主提示后</span>
-              </label>
-              <label>
-                <input type="radio" name="vectors_position" value="1" />
-                <span>聊天内@深度</span>
-                <input id="vectors_enhanced_depth" class="text_pole widthUnset vectors-depth-input" type="number" min="0" max="999" />
-                <span>作为</span>
-                <select id="vectors_enhanced_depth_role" class="text_pole widthNatural">
-                  <option value="0">系统</option>
-                  <option value="1">用户</option>
-                  <option value="2">助手</option>
-                </select>
-              </label>
+            <div class="flex-container alignItemsCenter" style="gap: 8px; flex-wrap: wrap;">
+              <button id="vectors_enhanced_repair_query_prompt" class="menu_button menu_button_icon" title="Create or repair the SillyTavern preset entry after chatHistory.">
+                <i class="fa-solid fa-wrench"></i>
+                <span>Vectors Enhanced Query</span>
+              </button>
+              <small id="vectors_enhanced_query_prompt_status" class="text-muted">relative after chatHistory</small>
             </div>
 
             <label class="checkbox_label" for="vectors_enhanced_include_wi">

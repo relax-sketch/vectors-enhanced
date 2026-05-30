@@ -16,6 +16,8 @@ import {
   chat_metadata,
   saveChatDebounced,
 } from '../../../../script.js';
+import { promptManager } from '../../../../scripts/openai.js';
+import { INJECTION_POSITION } from '../../../../scripts/PromptManager.js';
 
 // 兼容性处理：refreshSwipeButtons 在 ST 1.14.0+ 才存在
 let refreshSwipeButtons = null;
@@ -70,6 +72,12 @@ import { StorageAdapter } from './src/infrastructure/storage/StorageAdapter.js';
 import { VectorizationAdapter } from './src/infrastructure/api/VectorizationAdapter.js';
 import { eventBus } from './src/infrastructure/events/eventBus.instance.js';
 import { RerankService } from './src/services/rerank/index.js';
+import {
+  clearQueryPromptManagerContent,
+  ensureQueryPromptManagerEntry,
+  getQueryPromptManagerStatus,
+  setQueryPromptManagerContent,
+} from './src/core/query/QueryPromptManagerService.js';
 
 /**
  * @typedef {object} HashedMessage
@@ -311,6 +319,68 @@ let lastRerankNotifyTime = 0;
 // 向量化状态管理
 let isVectorizing = false;
 let vectorizationAbortController = null;
+
+function getQueryPromptManagerOptions() {
+  return {
+    injectionPosition: INJECTION_POSITION?.RELATIVE ?? 0,
+  };
+}
+
+function saveQueryPromptManagerStructure(result) {
+  if (!result?.ok || result.changed !== true) return;
+  try {
+    promptManager?.saveServiceSettings?.();
+  } catch (error) {
+    console.warn('Vectors: Failed to save PromptManager settings:', error?.message || error);
+  }
+  try {
+    saveSettingsDebounced?.();
+  } catch (_) { }
+}
+
+function prepareQueryPromptManagerEntry(options = {}) {
+  const result = ensureQueryPromptManagerEntry(promptManager, {
+    ...getQueryPromptManagerOptions(),
+    ...(options.clearContent ? { content: '' } : {}),
+  });
+  if (options.save !== false) {
+    saveQueryPromptManagerStructure(result);
+  }
+  return result;
+}
+
+function clearQueryInjectionPrompt(reason = '') {
+  const result = clearQueryPromptManagerContent(promptManager, reason, getQueryPromptManagerOptions());
+  saveQueryPromptManagerStructure(result);
+  if (!result?.ok) {
+    setExtensionPrompt(
+      EXTENSION_PROMPT_TAG,
+      '',
+      extension_prompt_types.IN_PROMPT,
+      0,
+      false,
+      extension_prompt_roles.SYSTEM,
+    );
+  }
+  return result;
+}
+
+function setQueryInjectionPrompt(content) {
+  const result = setQueryPromptManagerContent(promptManager, content, getQueryPromptManagerOptions());
+  saveQueryPromptManagerStructure(result);
+  if (!result?.ok) {
+    console.warn('Vectors: PromptManager unavailable, falling back to extension prompt injection:', result?.reason);
+    setExtensionPrompt(
+      EXTENSION_PROMPT_TAG,
+      content,
+      extension_prompt_types.IN_PROMPT,
+      0,
+      false,
+      extension_prompt_roles.SYSTEM,
+    );
+  }
+  return result;
+}
 
 /**
  * Deep merge utility function
@@ -2615,14 +2685,7 @@ async function rearrangeChat(chat, contextSize, abort, type) {
       return;
     }
 
-    setExtensionPrompt(
-      EXTENSION_PROMPT_TAG,
-      '',
-      settings.position,
-      settings.depth,
-      settings.include_wi,
-      settings.depth_role,
-    );
+    clearQueryInjectionPrompt('generation-started');
 
     // 检查主开关是否启用
     if (!settings.master_enabled) {
@@ -3038,18 +3101,11 @@ async function rearrangeChat(chat, contextSize, abort, type) {
           rerankApplied: rerankApplied
         };
 
-        setExtensionPrompt(
-          EXTENSION_PROMPT_TAG,
-          insertedText,
-          settings.position,
-          settings.depth,
-          settings.include_wi,
-          settings.depth_role,
-        );
+        setQueryInjectionPrompt(insertedText);
       } else {
         console.debug('Vectors: No relevant texts found after formatting');
         // 清空之前可能设置的内容
-        setExtensionPrompt(EXTENSION_PROMPT_TAG, '', settings.position, settings.depth, settings.include_wi, settings.depth_role);
+        clearQueryInjectionPrompt('no-relevant-text');
 
         // 也清空保存的内容
         lastInjectedContent = null;
@@ -3141,6 +3197,8 @@ async function rearrangeChat(chat, contextSize, abort, type) {
 }
 
 window['vectors_rearrangeChat'] = rearrangeChat;
+window['vectors_getQueryPromptManagerStatus'] = () => getQueryPromptManagerStatus(promptManager);
+window['vectors_repairQueryPromptManagerEntry'] = () => prepareQueryPromptManagerEntry({ save: true, clearContent: true });
 
 /**
  * Get the last injected content for preview
@@ -3498,6 +3556,8 @@ Object.assign(window.VectorsEnhanced, {
   getPlannerTaskOptions,
   queryForPrompt,
   diagnosePlannerQuery,
+  getQueryPromptManagerStatus: () => getQueryPromptManagerStatus(promptManager),
+  repairQueryPromptManagerEntry: () => prepareQueryPromptManagerEntry({ save: true, clearContent: true }),
 });
 
 
