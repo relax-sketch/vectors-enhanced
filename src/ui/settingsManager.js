@@ -583,29 +583,25 @@ export class SettingsManager {
       const statusEl = $('#vectors_enhanced_query_prompt_status');
       if (!statusEl.length) return;
       if (status?.exists) {
-        statusEl.text(status.activeEnabled ? 'relative after chatHistory, enabled' : 'relative after chatHistory, disabled');
+        if (!status.orderReferenced) {
+          statusEl.text('当前角色未加入 Prompt Manager 列表，点击按钮修复');
+        } else {
+          statusEl.text(status.activeEnabled ? '在 Prompt Manager 中位于 chatHistory 后方，已启用' : '在 Prompt Manager 中位于 chatHistory 后方，当前被禁用');
+        }
       } else {
-        statusEl.text('preset entry missing');
+        statusEl.text('Prompt Manager 预设条目未创建');
       }
     };
     $('#vectors_enhanced_repair_query_prompt').on('click', () => {
       const result = window.vectors_repairQueryPromptManagerEntry?.();
       updateQueryPromptStatus();
       if (result?.ok) {
-        toastr?.success?.('Vectors Enhanced Query preset entry is ready.');
+        toastr?.success?.('Vectors Enhanced Query 预设条目已准备好。');
       } else {
-        toastr?.error?.(`Failed to repair preset entry: ${result?.reason || 'unknown error'}`);
+        toastr?.error?.(`修复预设条目失败：${result?.reason || 'unknown error'}`);
       }
     });
     updateQueryPromptStatus();
-
-    // 包含世界信息
-    $('#vectors_enhanced_include_wi')
-      .prop('checked', this.settings.include_wi)
-      .on('input', () => {
-        this.settings.include_wi = $('#vectors_enhanced_include_wi').prop('checked');
-        this.updateAndSave();
-      });
   }
 
   /**

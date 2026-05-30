@@ -2,6 +2,20 @@ export const QUERY_PROMPT_MANAGER_IDENTIFIER = 'vectorsEnhancedQuery';
 export const QUERY_PROMPT_MANAGER_NAME = 'Vectors Enhanced Query';
 export const DEFAULT_QUERY_PROMPT_MANAGER_INJECTION_POSITION = 0;
 const ABSOLUTE_QUERY_PROMPT_MANAGER_INJECTION_POSITION = 1;
+const DEFAULT_PROMPT_ORDER = [
+  { identifier: 'main', enabled: true },
+  { identifier: 'worldInfoBefore', enabled: true },
+  { identifier: 'personaDescription', enabled: true },
+  { identifier: 'charDescription', enabled: true },
+  { identifier: 'charPersonality', enabled: true },
+  { identifier: 'scenario', enabled: true },
+  { identifier: 'enhanceDefinitions', enabled: false },
+  { identifier: 'nsfw', enabled: true },
+  { identifier: 'worldInfoAfter', enabled: true },
+  { identifier: 'dialogueExamples', enabled: true },
+  { identifier: 'chatHistory', enabled: true },
+  { identifier: 'jailbreak', enabled: true },
+];
 
 function clampInteger(value, fallback, min, max) {
   const parsed = Number(value);
@@ -29,6 +43,30 @@ function insertOrderReference(order, identifier, enabled = true) {
   return true;
 }
 
+function cloneOrder(order) {
+  return Array.isArray(order)
+    ? order.filter(entry => entry?.identifier).map(entry => ({
+      identifier: entry.identifier,
+      enabled: entry.enabled !== false,
+    }))
+    : [];
+}
+
+function createInitialOrder(settings, identifier) {
+  const sourceOrder = settings.prompt_order.find(list => Array.isArray(list?.order) && list.order.length > 0)?.order;
+  const order = cloneOrder(sourceOrder);
+  if (order.length === 0) {
+    const existingIdentifiers = new Set((settings.prompts || []).map(prompt => prompt?.identifier).filter(Boolean));
+    for (const entry of DEFAULT_PROMPT_ORDER) {
+      if (existingIdentifiers.has(entry.identifier)) {
+        order.push({ ...entry });
+      }
+    }
+  }
+  insertOrderReference(order, identifier, true);
+  return order.length > 0 ? order : [{ identifier, enabled: true }];
+}
+
 function ensureOrderReferences(promptManager, identifier) {
   const settings = promptManager?.serviceSettings;
   if (!settings) return { changed: false, activeEnabled: false, orderCount: 0 };
@@ -42,20 +80,20 @@ function ensureOrderReferences(promptManager, identifier) {
   }
 
   if (promptManager?.activeCharacter) {
-    let activeOrder = [];
-    if (typeof promptManager.getPromptOrderForCharacter === 'function') {
-      activeOrder = promptManager.getPromptOrderForCharacter(promptManager.activeCharacter);
-    }
-
-    if (!Array.isArray(activeOrder) || activeOrder.length === 0) {
-      const characterId = promptManager.activeCharacter.id;
-      settings.prompt_order.push({
+    const characterId = promptManager.activeCharacter.id;
+    let activeList = settings.prompt_order.find(list => String(list?.character_id) === String(characterId));
+    if (!activeList) {
+      activeList = {
         character_id: characterId,
-        order: [{ identifier, enabled: true }],
-      });
+        order: createInitialOrder(settings, identifier),
+      };
+      settings.prompt_order.push(activeList);
+      changed = true;
+    } else if (!Array.isArray(activeList.order) || activeList.order.length === 0) {
+      activeList.order = createInitialOrder(settings, identifier);
       changed = true;
     } else {
-      changed = insertOrderReference(activeOrder, identifier, true) || changed;
+      changed = insertOrderReference(activeList.order, identifier, true) || changed;
     }
   }
 

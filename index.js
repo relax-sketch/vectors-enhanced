@@ -177,9 +177,6 @@ const settings = {
   // Injection settings
   template: '<must_know>以下是从相关背景知识库，包含重要的上下文、设定或细节：\n{{text}}</must_know>',
   position: extension_prompt_types.IN_PROMPT,
-  depth: 2,
-  depth_role: extension_prompt_roles.SYSTEM,
-  include_wi: false,
 
   // Template presets
   template_presets: {
@@ -326,7 +323,15 @@ function getQueryPromptManagerOptions() {
   };
 }
 
-function saveQueryPromptManagerStructure(result) {
+function renderQueryPromptManager() {
+  try {
+    promptManager?.render?.(false);
+  } catch (error) {
+    console.warn('Vectors: Failed to render PromptManager:', error?.message || error);
+  }
+}
+
+function saveQueryPromptManagerStructure(result, options = {}) {
   if (!result?.ok || result.changed !== true) return;
   try {
     promptManager?.saveServiceSettings?.();
@@ -336,6 +341,9 @@ function saveQueryPromptManagerStructure(result) {
   try {
     saveSettingsDebounced?.();
   } catch (_) { }
+  if (options.render === true) {
+    renderQueryPromptManager();
+  }
 }
 
 function prepareQueryPromptManagerEntry(options = {}) {
@@ -344,9 +352,15 @@ function prepareQueryPromptManagerEntry(options = {}) {
     ...(options.clearContent ? { content: '' } : {}),
   });
   if (options.save !== false) {
-    saveQueryPromptManagerStructure(result);
+    saveQueryPromptManagerStructure(result, { render: options.render !== false });
   }
-  return result;
+  if (options.render === true && result?.ok && result.changed !== true) {
+    renderQueryPromptManager();
+  }
+  return {
+    ...result,
+    status: getQueryPromptManagerStatus(promptManager),
+  };
 }
 
 function clearQueryInjectionPrompt(reason = '') {
@@ -3198,7 +3212,7 @@ async function rearrangeChat(chat, contextSize, abort, type) {
 
 window['vectors_rearrangeChat'] = rearrangeChat;
 window['vectors_getQueryPromptManagerStatus'] = () => getQueryPromptManagerStatus(promptManager);
-window['vectors_repairQueryPromptManagerEntry'] = () => prepareQueryPromptManagerEntry({ save: true, clearContent: true });
+window['vectors_repairQueryPromptManagerEntry'] = () => prepareQueryPromptManagerEntry({ save: true, clearContent: true, render: true });
 
 /**
  * Get the last injected content for preview
@@ -3557,7 +3571,7 @@ Object.assign(window.VectorsEnhanced, {
   queryForPrompt,
   diagnosePlannerQuery,
   getQueryPromptManagerStatus: () => getQueryPromptManagerStatus(promptManager),
-  repairQueryPromptManagerEntry: () => prepareQueryPromptManagerEntry({ save: true, clearContent: true }),
+  repairQueryPromptManagerEntry: () => prepareQueryPromptManagerEntry({ save: true, clearContent: true, render: true }),
 });
 
 
@@ -4129,6 +4143,8 @@ jQuery(async () => {
   // 保存全局引用
   globalSettingsManager = settingsManager;
 
+  prepareQueryPromptManagerEntry({ save: true, clearContent: true, render: true });
+
   // 初始化列表和任务
   await settingsManager.initializeLists();
   await settingsManager.initializeTaskList();
@@ -4197,6 +4213,7 @@ jQuery(async () => {
 
   // 监听聊天重新加载事件，以便在使用 /hide 和 /unhide 命令后更新
   eventSource.on(event_types.CHAT_LOADED, async () => {
+    prepareQueryPromptManagerEntry({ save: true, clearContent: true, render: true });
     MessageUI.updateHiddenMessagesInfo();
   });
 

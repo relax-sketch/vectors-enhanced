@@ -95,6 +95,17 @@ test('relative query prompt removes legacy depth and order', () => {
   assert.equal(Object.hasOwn(result.prompt, 'injection_order'), false);
 });
 
+test('ensureQueryPromptManagerEntry keeps default order for a new active character', () => {
+  const promptManager = makePromptManager();
+  promptManager.activeCharacter = { id: 2 };
+
+  const result = ensureQueryPromptManagerEntry(promptManager);
+  const order = promptManager.getPromptOrderForCharacter(promptManager.activeCharacter);
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(order.map(item => item.identifier), ['main', 'chatHistory', QUERY_PROMPT_MANAGER_IDENTIFIER]);
+});
+
 test('clearQueryPromptManagerContent keeps entry and clears content', () => {
   const promptManager = makePromptManager();
   setQueryPromptManagerContent(promptManager, 'old content');

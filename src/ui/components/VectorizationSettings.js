@@ -33,7 +33,6 @@ export class VectorizationSettings {
         // Injection-related fields from InjectionSettings.js
         this.injectionFields = [
             'template',
-            'include_wi',
         ];
         this.contentTagFields = ['tag_chat', 'tag_wi', 'tag_file'];
 
@@ -94,7 +93,6 @@ export class VectorizationSettings {
                 this.onSettingsChange(`content_tags.${key}`, e.target.value);
             });
         });
-        $('#vectors_enhanced_include_wi').on('change', (e) => this.handleFieldChange('include_wi', e.target.checked));
     }
 
     /**
@@ -668,9 +666,13 @@ Object.assign(VectorizationSettings.prototype, {
         if (!statusEl.length) return;
 
         if (status?.exists) {
-            statusEl.text(status.activeEnabled ? 'relative after chatHistory, enabled' : 'relative after chatHistory, disabled');
+            if (!status.orderReferenced) {
+                statusEl.text('当前角色未加入 Prompt Manager 列表，点击按钮修复');
+            } else {
+                statusEl.text(status.activeEnabled ? '在 Prompt Manager 中位于 chatHistory 后方，已启用' : '在 Prompt Manager 中位于 chatHistory 后方，当前被禁用');
+            }
         } else {
-            statusEl.text('preset entry missing');
+            statusEl.text('Prompt Manager 预设条目未创建');
         }
         console.log('VectorizationSettings: Updated query prompt status', status);
     },
