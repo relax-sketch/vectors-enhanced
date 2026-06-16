@@ -103,7 +103,7 @@ export class RerankService {
 
         // Add deduplication instruction if enabled
         if (config.deduplication_enabled && config.deduplication_instruction) {
-            request.instruct = config.deduplication_instruction;
+            request.instruction = config.deduplication_instruction;
             console.debug('Vectors: Using deduplication instruction for rerank');
         }
 
@@ -125,7 +125,8 @@ export class RerankService {
         });
 
         if (!response.ok) {
-            throw new Error(`Rerank API failed: ${response.statusText}`);
+            const errorText = await response.text().catch(() => '');
+            throw new Error(`Rerank API failed: ${response.status} ${response.statusText}${errorText ? ` - ${errorText}` : ''}`);
         }
 
         const data = await response.json();
@@ -142,17 +143,22 @@ export class RerankService {
             throw new Error('Unexpected rerank API response format');
         }
 
+        const hasExplicitIndex = rerankData.results.some(r => Number.isInteger(r.index));
+        const resultsByIndex = new Map();
+        if (hasExplicitIndex) {
+            rerankData.results.forEach(item => {
+                if (Number.isInteger(item.index)) {
+                    resultsByIndex.set(item.index, item);
+                }
+            });
+        }
+
         const rerankedResults = indexedResults.map((result, arrayIndex) => {
             let relevanceScore = 0;
-            
-            // Try multiple matching methods
-            const rerankedResult = 
-                // Method 1: Match by index field
-                rerankData.results.find(r => r.index === result._rerank_index) ||
-                // Method 2: Match by array position
-                rerankData.results[arrayIndex] ||
-                // Method 3: Use corresponding position if lengths match
-                (rerankData.results.length === indexedResults.length ? rerankData.results[arrayIndex] : null);
+
+            const rerankedResult = hasExplicitIndex
+                ? resultsByIndex.get(result._rerank_index)
+                : rerankData.results[arrayIndex];
             
             if (rerankedResult && typeof rerankedResult.relevance_score === 'number') {
                 relevanceScore = rerankedResult.relevance_score;
@@ -162,7 +168,8 @@ export class RerankService {
             }
             
             // Calculate hybrid score
-            const hybridScore = relevanceScore * hybridAlpha + result.score * (1 - hybridAlpha);
+            const originalScore = Number(result.score) || 0;
+            const hybridScore = relevanceScore * hybridAlpha + originalScore * (1 - hybridAlpha);
             
             // Remove temporary index property
             const { _rerank_index, ...cleanResult } = result;
@@ -171,7 +178,7 @@ export class RerankService {
                 ...cleanResult,
                 hybrid_score: hybridScore,
                 rerank_score: relevanceScore,
-                original_score: result.score,
+                original_score: originalScore,
                 _rerank_success: relevanceScore > 0
             };
         });

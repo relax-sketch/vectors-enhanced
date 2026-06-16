@@ -32,6 +32,11 @@ export class QuerySettings {
             'rerank_top_n',
             'rerank_hybrid_alpha'
         ];
+        this.rerankConfigFields = [
+            ...this.rerankFields,
+            'rerank_deduplication_enabled',
+            'rerank_deduplication_instruction'
+        ];
         
         this.initialized = false;
     }
@@ -61,6 +66,8 @@ export class QuerySettings {
      * Bind event listeners for query settings
      */
     bindEventListeners() {
+        this.bindRerankPresetListeners();
+
         // Rerank enable/disable
         $('#vectors_enhanced_rerank_enabled').on('change', (e) => {
             this.handleRerankToggle(e.target.checked);
@@ -129,6 +136,154 @@ export class QuerySettings {
         });
 
         console.log('QuerySettings: Event listeners bound');
+    }
+
+    /**
+     * Bind rerank API/model preset controls.
+     */
+    bindRerankPresetListeners() {
+        $('#vectors_enhanced_rerank_preset_select').on('change', (e) => {
+            this.applyRerankPreset(e.target.value);
+        });
+
+        $('#vectors_enhanced_rerank_preset_save').on('click', async (e) => {
+            e.preventDefault();
+            await this.saveCurrentRerankPreset();
+        });
+
+        $('#vectors_enhanced_rerank_preset_delete').on('click', (e) => {
+            e.preventDefault();
+            this.deleteSelectedRerankPreset();
+        });
+    }
+
+    /**
+     * Build a preset object from current rerank API/model settings.
+     */
+    buildCurrentRerankPreset(name) {
+        const preset = {
+            id: `rerank_preset_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+            name,
+            createdAt: Date.now(),
+            config: {}
+        };
+
+        this.rerankConfigFields.forEach(field => {
+            preset.config[field] = this.settings[field];
+        });
+
+        return preset;
+    }
+
+    /**
+     * Render rerank preset dropdown.
+     */
+    renderRerankPresetOptions() {
+        const select = $('#vectors_enhanced_rerank_preset_select');
+        if (!select.length) return;
+
+        const presets = Array.isArray(this.settings.rerank_config_presets)
+            ? this.settings.rerank_config_presets
+            : [];
+
+        const currentValue = select.val();
+        select.empty();
+        select.append('<option value="">-- 选择已保存配置 --</option>');
+        presets.forEach(preset => {
+            select.append($('<option></option>').val(preset.id).text(preset.name));
+        });
+
+        if (currentValue && presets.some(preset => preset.id === currentValue)) {
+            select.val(currentValue);
+        }
+    }
+
+    /**
+     * Save current rerank API/model fields as a named preset.
+     */
+    async saveCurrentRerankPreset() {
+        const defaultName = this.getDefaultRerankPresetName();
+        let name = window.prompt('请输入 Rerank 配置名称', defaultName);
+        if (!name || !name.trim()) return;
+        name = name.trim();
+
+        if (!Array.isArray(this.settings.rerank_config_presets)) {
+            this.settings.rerank_config_presets = [];
+        }
+
+        const existingIndex = this.settings.rerank_config_presets.findIndex(preset => preset.name === name);
+        const preset = this.buildCurrentRerankPreset(name);
+
+        if (existingIndex >= 0) {
+            preset.id = this.settings.rerank_config_presets[existingIndex].id;
+            preset.createdAt = this.settings.rerank_config_presets[existingIndex].createdAt || preset.createdAt;
+            preset.updatedAt = Date.now();
+            this.settings.rerank_config_presets[existingIndex] = preset;
+        } else {
+            this.settings.rerank_config_presets.push(preset);
+        }
+
+        this.saveSettings();
+        this.renderRerankPresetOptions();
+        $('#vectors_enhanced_rerank_preset_select').val(preset.id);
+        this.onSettingsChange('rerank_config_presets', this.settings.rerank_config_presets);
+        this.toastr?.success?.('Rerank 配置已保存');
+    }
+
+    /**
+     * Apply a saved rerank preset to current settings and UI.
+     */
+    applyRerankPreset(presetId) {
+        if (!presetId) return;
+
+        const presets = Array.isArray(this.settings.rerank_config_presets)
+            ? this.settings.rerank_config_presets
+            : [];
+        const preset = presets.find(item => item.id === presetId);
+        if (!preset) return;
+
+        this.rerankConfigFields.forEach(field => {
+            if (Object.prototype.hasOwnProperty.call(preset.config || {}, field)) {
+                this.settings[field] = preset.config[field];
+            }
+        });
+
+        this.saveSettings();
+        this.loadCurrentSettings();
+        this.onSettingsChange('rerank_config_preset_applied', preset.name);
+        this.toastr?.success?.(`已切换 Rerank 配置：${preset.name}`);
+    }
+
+    /**
+     * Delete the selected rerank preset.
+     */
+    deleteSelectedRerankPreset() {
+        const select = $('#vectors_enhanced_rerank_preset_select');
+        const presetId = select.val();
+        if (!presetId) return;
+
+        const presets = Array.isArray(this.settings.rerank_config_presets)
+            ? this.settings.rerank_config_presets
+            : [];
+        const preset = presets.find(item => item.id === presetId);
+        if (!preset) return;
+
+        if (!window.confirm(`删除 Rerank 配置“${preset.name}”？`)) return;
+
+        this.settings.rerank_config_presets = presets.filter(item => item.id !== presetId);
+        this.saveSettings();
+        this.renderRerankPresetOptions();
+        select.val('');
+        this.onSettingsChange('rerank_config_presets', this.settings.rerank_config_presets);
+        this.toastr?.success?.('Rerank 配置已删除');
+    }
+
+    /**
+     * Generate a readable default rerank preset name.
+     */
+    getDefaultRerankPresetName() {
+        const model = this.settings.rerank_model || 'rerank';
+        return `rerank - ${model}`;
     }
 
     /**
@@ -282,7 +437,8 @@ export class QuerySettings {
      */
     loadCurrentSettings() {
         console.log('QuerySettings: Loading current settings...');
-        
+        this.renderRerankPresetOptions();
+
         this.rerankFields.forEach(field => {
             const fieldId = `#vectors_enhanced_${field}`;
             const element = $(fieldId);
@@ -809,6 +965,10 @@ export class QuerySettings {
         console.log('QuerySettings: Destroying...');
         
         // Remove event listeners
+        $('#vectors_enhanced_rerank_preset_select').off('change');
+        $('#vectors_enhanced_rerank_preset_save').off('click');
+        $('#vectors_enhanced_rerank_preset_delete').off('click');
+
         this.rerankFields.forEach(field => {
             $(`#vectors_enhanced_${field}`).off('input change');
         });

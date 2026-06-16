@@ -12,7 +12,9 @@ export class VectorizationSettings {
     constructor(dependencies = {}) {
         this.settings = dependencies.settings;
         this.configManager = dependencies.configManager;
+        this.getRequestHeaders = dependencies.getRequestHeaders;
         this.onSettingsChange = dependencies.onSettingsChange || (() => {});
+        this.lastSyncedSiliconFlowKey = null;
 
         // Source configurations
         this.sourceConfigs = {
@@ -23,6 +25,10 @@ export class VectorizationSettings {
             vllm: {
                 selector: '#vectors_enhanced_vllm_settings',
                 fields: ['vllm_model', 'vllm_url', 'vllm_api_key']
+            },
+            siliconflow: {
+                selector: '#vectors_enhanced_siliconflow_settings',
+                fields: ['siliconflow_model', 'siliconflow_api_key']
             },
             ollama: {
                 selector: '#vectors_enhanced_ollama_settings',
@@ -76,6 +82,7 @@ export class VectorizationSettings {
         // Model and URL inputs for each source
         this.bindSourceSpecificListeners('transformers');
         this.bindSourceSpecificListeners('vllm');
+        this.bindSourceSpecificListeners('siliconflow');
         this.bindSourceSpecificListeners('ollama');
 
         // General vectorization parameters
@@ -124,7 +131,7 @@ export class VectorizationSettings {
         config.fields.forEach(field => {
             const fieldId = `#vectors_enhanced_${field}`;
             $(fieldId).on('input change', (e) => {
-                this.handleFieldChange(field, e.target.value, e.target.type === 'checkbox' ? e.target.checked : undefined);
+                this.handleFieldChange(field, e.target.value, e.target.type === 'checkbox' ? e.target.checked : undefined, e.type);
             });
         });
     }
@@ -209,6 +216,9 @@ export class VectorizationSettings {
             'vllm_url',
             'vllm_model',
             'vllm_api_key',
+            'siliconflow_model',
+            'siliconflow_api_key',
+            'siliconflow_endpoint',
             'ollama_url',
             'ollama_model',
             'ollama_keep'
@@ -354,7 +364,7 @@ export class VectorizationSettings {
     /**
      * Handle individual field changes
      */
-    handleFieldChange(field, value, checkboxValue) {
+    handleFieldChange(field, value, checkboxValue, eventType = 'input') {
         console.log(`VectorizationSettings: Field ${field} changed to:`, value);
 
         // Handle checkbox fields
@@ -376,10 +386,49 @@ export class VectorizationSettings {
             this.disableRerank();
         } else if (field === 'template') {
             this.validateTemplate(value);
+        } else if (field === 'siliconflow_api_key' && eventType === 'change') {
+            this.syncSiliconFlowSecret(value);
         }
 
         // Notify settings change
         this.onSettingsChange(field, value);
+    }
+
+    /**
+     * Sync SiliconFlow API key into SillyTavern's secret store for /api/vector.
+     */
+    async syncSiliconFlowSecret(apiKey) {
+        const value = String(apiKey || '').trim();
+        if (!value || value === this.lastSyncedSiliconFlowKey) return;
+
+        try {
+            const headers = this.getRequestHeaders
+                ? this.getRequestHeaders()
+                : { 'Content-Type': 'application/json' };
+            if (!headers['Content-Type'] && !headers['content-type']) {
+                headers['Content-Type'] = 'application/json';
+            }
+
+            const response = await fetch('/api/secrets/write', {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({
+                    key: 'api_key_siliconflow',
+                    value,
+                    label: 'Vectors Enhanced SiliconFlow'
+                })
+            });
+
+            if (!response.ok) {
+                throw new Error(`Secret write failed: ${response.status}`);
+            }
+
+            this.lastSyncedSiliconFlowKey = value;
+            window.toastr?.success?.('SiliconFlow API Key 已保存到 SillyTavern 密钥');
+        } catch (error) {
+            console.warn('VectorizationSettings: Failed to sync SiliconFlow API key:', error);
+            window.toastr?.warning?.('SiliconFlow API Key 已保存到插件设置，但同步到 SillyTavern 密钥失败');
+        }
     }
 
     /**
@@ -529,6 +578,12 @@ export class VectorizationSettings {
                     isValid = false;
                 }
                 break;
+            case 'siliconflow':
+                if (!this.settings.siliconflow_model) {
+                    errors.push('SiliconFlow model name is required');
+                    isValid = false;
+                }
+                break;
             case 'ollama':
                 if (!this.settings.ollama_model) {
                     errors.push('Ollama model name is required');
@@ -604,6 +659,10 @@ export class VectorizationSettings {
             local_model: this.settings.local_model,
             vllm_model: this.settings.vllm_model,
             vllm_url: this.settings.vllm_url,
+            vllm_api_key: this.settings.vllm_api_key,
+            siliconflow_model: this.settings.siliconflow_model,
+            siliconflow_api_key: this.settings.siliconflow_api_key ? '***' : '',
+            siliconflow_endpoint: this.settings.siliconflow_endpoint,
             ollama_model: this.settings.ollama_model,
             ollama_url: this.settings.ollama_url,
             ollama_keep: this.settings.ollama_keep,

@@ -242,6 +242,28 @@ export class SettingsManager {
         this.updateAndSave();
       });
 
+    $('#vectors_enhanced_vllm_api_key')
+      .val(this.settings.vllm_api_key || '')
+      .on('input', () => {
+        this.settings.vllm_api_key = String($('#vectors_enhanced_vllm_api_key').val());
+        this.updateAndSave();
+      });
+
+    // SiliconFlow 设置
+    $('#vectors_enhanced_siliconflow_model')
+      .val(this.settings.siliconflow_model)
+      .on('input', () => {
+        this.settings.siliconflow_model = String($('#vectors_enhanced_siliconflow_model').val());
+        this.updateAndSave();
+      });
+
+    $('#vectors_enhanced_siliconflow_api_key')
+      .val(this.settings.siliconflow_api_key || '')
+      .on('input', () => {
+        this.settings.siliconflow_api_key = String($('#vectors_enhanced_siliconflow_api_key').val());
+        this.updateAndSave();
+      });
+
     // 本地模型设置
     $('#vectors_enhanced_local_model')
       .val(this.settings.local_model)

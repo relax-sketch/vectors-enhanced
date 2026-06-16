@@ -180,6 +180,8 @@ export class VectorExportImportManager {
         return settings.webllm_model || 'all-MiniLM-L6-v2-q4f16_1';
       case 'vllm':
         return settings.vllm_model || '';
+      case 'siliconflow':
+        return settings.siliconflow_model || '';
       case 'koboldcpp':
         return 'koboldcpp';
       case 'local':

@@ -127,6 +127,9 @@ const settings = {
   vllm_model: '',
   vllm_url: '',
   vllm_api_key: '', // vLLM API key
+  siliconflow_model: 'Qwen/Qwen3-Embedding-8B',
+  siliconflow_api_key: '',
+  siliconflow_endpoint: 'cn',
   ollama_model: 'rjmalagon/gte-qwen2-1.5b-instruct-embed-f16',
   ollama_url: '', // ollama API地址
   ollama_keep: false,
@@ -159,6 +162,7 @@ const settings = {
   rerank_top_n: 20,
   rerank_hybrid_alpha: 0.7, // Rerank score weight
   rerank_success_notify: true, // 是否显示Rerank成功通知
+  rerank_config_presets: [], // Saved rerank API/model presets
 
   // Experimental settings
   query_instruction_enabled: false, // Enable query instruction
@@ -3598,6 +3602,11 @@ function getVectorsRequestBody(args = {}) {
       // 优先使用插件设置的API key，如果为空则使用文本生成API的设置
       body.apiKey = settings.vllm_api_key || textgenerationwebui_settings.api_key_vllm || '';
       break;
+    case 'siliconflow':
+      body.model = settings.siliconflow_model;
+      body.apiKey = settings.siliconflow_api_key || '';
+      body.siliconflow_endpoint = settings.siliconflow_endpoint || 'cn';
+      break;
     case 'ollama':
       body.model = settings.ollama_model;
       body.apiUrl =
@@ -3622,6 +3631,12 @@ function throwIfSourceInvalid() {
     }
     if (!settings.vllm_model) {
       throw new Error('vLLM model not specified');
+    }
+  }
+
+  if (settings.source === 'siliconflow') {
+    if (!settings.siliconflow_model) {
+      throw new Error('SiliconFlow model not specified');
     }
   }
 
@@ -3880,8 +3895,23 @@ jQuery(async () => {
   if (settings.vllm_api_key === undefined) {
     settings.vllm_api_key = '';
   }
+  if (settings.siliconflow_model === undefined) {
+    settings.siliconflow_model = 'Qwen/Qwen3-Embedding-8B';
+  }
+  if (settings.siliconflow_api_key === undefined) {
+    settings.siliconflow_api_key = '';
+  }
+  if (settings.siliconflow_endpoint === undefined) {
+    settings.siliconflow_endpoint = 'cn';
+  }
   if (!Array.isArray(settings.embedding_config_presets)) {
     settings.embedding_config_presets = [];
+  }
+  if (!Array.isArray(settings.rerank_config_presets)) {
+    settings.rerank_config_presets = [];
+  }
+  if (!Number.isFinite(Number(settings.rerank_top_n)) || Number(settings.rerank_top_n) < 1) {
+    settings.rerank_top_n = 20;
   }
 
   // 保存修正后的设置 - 使用深度合并而不是浅拷贝
@@ -3912,6 +3942,7 @@ jQuery(async () => {
   const vectorizationSettings = new VectorizationSettings({
     settings,
     configManager,
+    getRequestHeaders,
     onSettingsChange: (field, value) => {
       console.debug(`VectorizationSettings: ${field} changed to:`, value);
       Object.assign(extension_settings.vectors_enhanced, settings);
@@ -4612,6 +4643,8 @@ jQuery(async () => {
         return settings?.llamacpp_model || '';
       case 'vllm':
         return settings?.vllm_model || '';
+      case 'siliconflow':
+        return settings?.siliconflow_model || '';
       case 'voyageai':
         return settings?.voyageai_model || '';
       case 'gemini':

@@ -294,6 +294,8 @@ export class VectorStoragePathUI {
                 return vectorSettings?.ollama_model || '';
             case 'vllm':
                 return vectorSettings?.vllm_model || '';
+            case 'siliconflow':
+                return vectorSettings?.siliconflow_model || '';
             case 'koboldcpp':
                 return 'koboldcpp';
             default:

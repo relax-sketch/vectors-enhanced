@@ -16,8 +16,8 @@ export class RerankConfig {
             url: this.settings.rerank_url || 'https://api.siliconflow.cn/v1/rerank',
             apiKey: this.settings.rerank_apiKey || '',
             model: this.settings.rerank_model || 'Pro/BAAI/bge-reranker-v2-m3',
-            top_n: this.settings.rerank_top_n || 20,
-            hybrid_alpha: this.settings.rerank_hybrid_alpha || 0.7,
+            top_n: this.settings.rerank_top_n ?? 20,
+            hybrid_alpha: this.settings.rerank_hybrid_alpha ?? 0.7,
             success_notify: this.settings.rerank_success_notify !== false,
             deduplication_enabled: this.settings.rerank_deduplication_enabled || false,
             deduplication_instruction: this.settings.rerank_deduplication_instruction || ''
