@@ -569,6 +569,27 @@ function calculateWeightedTaskLimits(tasks, totalLimit) {
   return allocations;
 }
 
+async function processTaskQueryResults(queryText, taskResults, taskLimit, useRerank = true) {
+  const limit = Math.max(0, Math.floor(Number(taskLimit) || 0));
+  if (!Array.isArray(taskResults) || taskResults.length === 0 || limit <= 0) {
+    return { results: [], rerankApplied: false };
+  }
+
+  if (useRerank && rerankService && rerankService.isEnabled()) {
+    const rerankedResults = await rerankService.rerankResults(queryText, taskResults, { suppressNotification: true });
+    return {
+      results: rerankService.limitResults(rerankedResults, limit),
+      rerankApplied: true,
+    };
+  }
+
+  const sortedResults = [...taskResults].sort((a, b) => (b.score || 0) - (a.score || 0));
+  return {
+    results: sortedResults.slice(0, limit),
+    rerankApplied: false,
+  };
+}
+
 /**
  * Adds a new vector task
  * @param {string} chatId Chat ID
@@ -2761,6 +2782,8 @@ async function rearrangeChat(chat, contextSize, abort, type) {
 
     // Query all enabled tasks
     let allResults = [];
+    let resultsBeforeRerank = [];
+    let rerankApplied = false;
     const maxResults = settings.max_results || 10;
     const taskQueryLimits = calculateWeightedTaskLimits(tasks, maxResults);
 
@@ -2780,6 +2803,8 @@ async function rearrangeChat(chat, contextSize, abort, type) {
         collectionId = `${task.ownerChatId || chatId}_${task.taskId}`;
         console.debug(`Vectors: Querying collection "${collectionId}" for task "${task.name}"`);
       }
+
+      let taskResults = [];
 
       try {
         const results = await storageAdapter.queryCollection(collectionId, queryText, taskLimit, settings.score_threshold);
@@ -2821,7 +2846,7 @@ async function rearrangeChat(chat, contextSize, abort, type) {
                   score = results.similarities[index];
                 }
 
-                allResults.push({
+                taskResults.push({
                   text: meta.text,
                   score: score,
                   metadata: {
@@ -2854,7 +2879,7 @@ async function rearrangeChat(chat, contextSize, abort, type) {
                   score = results.similarities[index];
                 }
 
-                allResults.push({
+                taskResults.push({
                   text: item.text,
                   score: score,
                   metadata: {
@@ -2875,7 +2900,7 @@ async function rearrangeChat(chat, contextSize, abort, type) {
             results.hashes.forEach((hash, index) => {
               const textItem = task.textContent.find(item => item.hash === hash);
               if (textItem && textItem.text) {
-                allResults.push({
+                taskResults.push({
                   text: textItem.text,
                   score: results.metadata?.[index]?.score || 0,
                   metadata: {
@@ -2898,42 +2923,30 @@ async function rearrangeChat(chat, contextSize, abort, type) {
             });
           }
         }
+
+        resultsBeforeRerank.push(...taskResults);
+        const processedTaskResults = await processTaskQueryResults(queryText, taskResults, taskLimit);
+        if (processedTaskResults.rerankApplied) {
+          rerankApplied = true;
+        }
+        allResults.push(...processedTaskResults.results);
       } catch (error) {
         console.error(`Vectors: Failed to query task ${task.name}:`, error);
       }
     }
 
     // 保存原始查询结果数量（用于通知显示）
-    const originalQueryCount = allResults.length;
+    const originalQueryCount = resultsBeforeRerank.length;
 
     // 保存重排前的结果（深拷贝）
-    const resultsBeforeRerank = allResults.map(r => ({
+    resultsBeforeRerank = resultsBeforeRerank.map(r => ({
         text: r.text,
         score: r.score,
         metadata: { ...r.metadata }
     }));
 
-    // 在 rerank 之前不要限制结果数量，让 rerank 有更多候选项
-    // Use RerankService if available
-    let rerankApplied = false;
-    if (rerankService && rerankService.isEnabled() && allResults.length > 0) {
-        allResults = await rerankService.rerankResults(queryText, allResults);
-        rerankApplied = true;
-    } else {
-        // If reranking is not enabled, sort by original score
-        allResults.sort((a, b) => (b.score || 0) - (a.score || 0));
-    }
-
-    // 限制结果数量
-    if (rerankService && rerankService.isEnabled()) {
-      allResults = rerankService.limitResults(allResults, settings.max_results || 10);
-    } else {
-      // 如果没有启用 rerank，使用 max_results
-      const finalLimit = settings.max_results || 10;
-      if (allResults.length > finalLimit) {
-        console.debug(`Vectors: Limiting final results from ${allResults.length} to ${finalLimit}`);
-        allResults = allResults.slice(0, finalLimit);
-      }
+    if (!rerankApplied) {
+      allResults.sort((a, b) => (b.score || 0) - (a.score || 0));
     }
 
     // 初始化变量
@@ -3421,6 +3434,8 @@ async function queryForPrompt(options = {}) {
   const taskQueryLimits = calculateWeightedTaskLimits(tasks, maxResults);
 
   let allResults = [];
+  let originalQueryCount = 0;
+  let rerankApplied = false;
   const taskErrors = [];
   for (const task of tasks) {
     const taskLimit = taskQueryLimits.get(task) || 0;
@@ -3429,7 +3444,13 @@ async function queryForPrompt(options = {}) {
     const collectionId = getTaskCollectionId(task, chatId);
     try {
       const results = await storageAdapter.queryCollection(collectionId, queryText, taskLimit, scoreThreshold);
-      allResults.push(...collectTextResultsFromVectorResponse(results, task, collectionId));
+      const taskResults = collectTextResultsFromVectorResponse(results, task, collectionId);
+      originalQueryCount += taskResults.length;
+      const processedTaskResults = await processTaskQueryResults(queryText, taskResults, taskLimit, useRerank);
+      if (processedTaskResults.rerankApplied) {
+        rerankApplied = true;
+      }
+      allResults.push(...processedTaskResults.results);
     } catch (error) {
       taskErrors.push({
         taskName: task.name || task.taskId,
@@ -3441,15 +3462,8 @@ async function queryForPrompt(options = {}) {
     }
   }
 
-  const originalQueryCount = allResults.length;
-  let rerankApplied = false;
-  if (useRerank && rerankService?.isEnabled?.() && allResults.length > 0) {
-    allResults = await rerankService.rerankResults(queryText, allResults);
-    rerankApplied = true;
-    allResults = rerankService.limitResults(allResults, maxResults);
-  } else {
+  if (!rerankApplied) {
     allResults.sort((a, b) => (b.score || 0) - (a.score || 0));
-    allResults = allResults.slice(0, maxResults);
   }
 
   const { text: rawText, groupedResults } = formatPlannerQueryResults(allResults);

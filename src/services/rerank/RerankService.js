@@ -33,7 +33,7 @@ export class RerankService {
      * @param {import('./RerankTypes.js').RerankItem[]} results - Array of search results
      * @returns {Promise<import('./RerankTypes.js').RerankItem[]>} Reranked results
      */
-    async rerankResults(query, results) {
+    async rerankResults(query, results, options = {}) {
         if (!this.isEnabled() || results.length === 0) {
             return results;
         }
@@ -68,7 +68,9 @@ export class RerankService {
             );
 
             // Show notification if enabled
-            this._showNotification(config, results.length, rerankedResults.length);
+            if (options.suppressNotification !== true) {
+                this._showNotification(config, results.length, rerankedResults.length);
+            }
 
             return rerankedResults;
 
