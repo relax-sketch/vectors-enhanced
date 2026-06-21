@@ -511,14 +511,15 @@ function getVisibleChatTasks(chatId) {
  * available slots, the highest-weight tasks receive the available slots.
  * @param {Array<Object>} tasks Enabled vector tasks
  * @param {number} totalLimit Total result budget
- * @returns {Map<string, number>} taskId -> query limit
+ * @returns {Map<Object, number>} task -> query limit
  */
 function calculateWeightedTaskLimits(tasks, totalLimit) {
   const limit = Math.max(0, Math.floor(Number(totalLimit) || 0));
-  const allocations = new Map(tasks.map(task => [task.taskId, 0]));
   if (limit <= 0 || !Array.isArray(tasks) || tasks.length === 0) {
-    return allocations;
+    return new Map();
   }
+
+  const allocations = new Map(tasks.map(task => [task, 0]));
 
   const weightedTasks = tasks
     .map((task, index) => ({
@@ -555,7 +556,7 @@ function calculateWeightedTaskLimits(tasks, totalLimit) {
     });
 
   shares.forEach(item => {
-    allocations.set(item.task.taskId, item.base);
+    allocations.set(item.task, item.base);
   });
 
   console.debug('Vectors: Weighted task query limits:', shares.map(item => ({
@@ -2760,15 +2761,11 @@ async function rearrangeChat(chat, contextSize, abort, type) {
 
     // Query all enabled tasks
     let allResults = [];
-    // 为了确保能从所有任务中获得最相关的结果，每个任务查询稍多一些
     const maxResults = settings.max_results || 10;
-    const rerankEnabled = rerankService && rerankService.isEnabled();
-    const taskQueryLimits = rerankEnabled
-      ? new Map(tasks.map(task => [task.taskId, Math.max(Math.ceil(maxResults * 1.5), 20)]))
-      : calculateWeightedTaskLimits(tasks, maxResults);
+    const taskQueryLimits = calculateWeightedTaskLimits(tasks, maxResults);
 
     for (const task of tasks) {
-      const taskLimit = taskQueryLimits.get(task.taskId) || 0;
+      const taskLimit = taskQueryLimits.get(task) || 0;
       if (taskLimit <= 0) {
         console.debug(`Vectors: Skipping task "${task.name}" because weighted query limit is 0`);
         continue;
@@ -3421,14 +3418,12 @@ async function queryForPrompt(options = {}) {
     ? Number(options.scoreThreshold)
     : Number(settings.score_threshold || 0.25);
   const useRerank = options.useRerank ?? true;
-  const taskQueryLimits = (useRerank && rerankService?.isEnabled?.())
-    ? new Map(tasks.map(task => [task.taskId, Math.max(Math.ceil(maxResults * 1.5), 20)]))
-    : calculateWeightedTaskLimits(tasks, maxResults);
+  const taskQueryLimits = calculateWeightedTaskLimits(tasks, maxResults);
 
   let allResults = [];
   const taskErrors = [];
   for (const task of tasks) {
-    const taskLimit = taskQueryLimits.get(task.taskId) || 0;
+    const taskLimit = taskQueryLimits.get(task) || 0;
     if (taskLimit <= 0) continue;
 
     const collectionId = getTaskCollectionId(task, chatId);
