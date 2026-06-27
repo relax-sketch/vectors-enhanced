@@ -154,7 +154,7 @@ export async function updateTaskList(getChatTasks, renameVectorTask, removeVecto
     });
 
     const weightControl = $(`
-        <label class="vectors-task-weight" title="检索权重。未启用 Rerank 时，最大结果数会按各任务权重比例分配。0 表示不检索此任务。">
+        <label class="vectors-task-weight" title="检索权重。最大结果数会按各任务权重比例分配。0 表示不检索此任务。">
             <span>权重</span>
             <input type="number" class="text_pole" min="0" max="100" step="0.1" value="${Number(task.vectorQueryWeight ?? 1)}" />
         </label>

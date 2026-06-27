@@ -506,18 +506,22 @@ function getVisibleChatTasks(chatId) {
 }
 
 /**
- * Allocates a fixed query result budget across tasks by their configured weights.
- * Tasks with weight <= 0 are skipped. If there are more positive-weight tasks than
- * available slots, the highest-weight tasks receive the available slots.
+ * Allocates a query result budget across tasks by their configured weights.
+ * Tasks with weight <= 0 are skipped. A minimum positive limit can be used for
+ * public API calls that need candidates from every enabled positive-weight task;
+ * callers should still apply a final global limit after merging task results.
  * @param {Array<Object>} tasks Enabled vector tasks
  * @param {number} totalLimit Total result budget
+ * @param {Object} options Allocation options
+ * @param {number} options.minPositiveLimit Minimum query limit for each positive-weight task
  * @returns {Map<Object, number>} task -> query limit
  */
-function calculateWeightedTaskLimits(tasks, totalLimit) {
+function calculateWeightedTaskLimits(tasks, totalLimit, options = {}) {
   const limit = Math.max(0, Math.floor(Number(totalLimit) || 0));
   if (limit <= 0 || !Array.isArray(tasks) || tasks.length === 0) {
     return new Map();
   }
+  const minPositiveLimit = Math.max(0, Math.floor(Number(options.minPositiveLimit) || 0));
 
   const allocations = new Map(tasks.map(task => [task, 0]));
 
@@ -556,20 +560,35 @@ function calculateWeightedTaskLimits(tasks, totalLimit) {
     });
 
   shares.forEach(item => {
-    allocations.set(item.task, item.base);
+    allocations.set(item.task, Math.max(item.base, minPositiveLimit));
   });
 
   console.debug('Vectors: Weighted task query limits:', shares.map(item => ({
     task: item.task.name,
     taskId: item.task.taskId,
     weight: item.weight,
-    limit: item.base,
+    limit: allocations.get(item.task) || 0,
   })));
 
   return allocations;
 }
 
-async function processTaskQueryResults(queryText, taskResults, taskLimit, useRerank = true) {
+function getResultRankScore(result) {
+  const score = result?.hybrid_score ?? result?.rerank_score ?? result?.score ?? result?.original_score ?? 0;
+  return Number.isFinite(Number(score)) ? Number(score) : 0;
+}
+
+function sortResultsByRankScore(results) {
+  return [...(results || [])].sort((a, b) => getResultRankScore(b) - getResultRankScore(a));
+}
+
+function limitMergedQueryResults(results, maxResults) {
+  const limit = Math.max(0, Math.floor(Number(maxResults) || 0));
+  if (limit <= 0) return [];
+  return sortResultsByRankScore(results).slice(0, limit);
+}
+
+async function processTaskQueryResults(queryText, taskResults, taskLimit, useRerank = true, options = {}) {
   const limit = Math.max(0, Math.floor(Number(taskLimit) || 0));
   if (!Array.isArray(taskResults) || taskResults.length === 0 || limit <= 0) {
     return { results: [], rerankApplied: false };
@@ -577,6 +596,12 @@ async function processTaskQueryResults(queryText, taskResults, taskLimit, useRer
 
   if (useRerank && rerankService && rerankService.isEnabled()) {
     const rerankedResults = await rerankService.rerankResults(queryText, taskResults, { suppressNotification: true });
+    if (options.ignoreRerankTopN === true) {
+      return {
+        results: limitMergedQueryResults(rerankedResults, limit),
+        rerankApplied: true,
+      };
+    }
     return {
       results: rerankService.limitResults(rerankedResults, limit),
       rerankApplied: true,
@@ -2794,13 +2819,10 @@ async function rearrangeChat(chat, contextSize, abort, type) {
         continue;
       }
 
-      // 支持外挂任务：如果任务有 type 和 source 字段，使用源集合ID
-      let collectionId;
-      if (task.type === 'external' && task.source) {
-        collectionId = task.source;
+      const collectionId = getTaskCollectionId(task, chatId);
+      if (task.type === 'external') {
         console.debug(`Vectors: Querying external task "${task.name}" using source collection "${collectionId}"`);
       } else {
-        collectionId = `${task.ownerChatId || chatId}_${task.taskId}`;
         console.debug(`Vectors: Querying collection "${collectionId}" for task "${task.name}"`);
       }
 
@@ -3244,6 +3266,9 @@ window['vectors_getLastInjectedContent'] = getLastInjectedContent;
 
 function getTaskCollectionId(task, currentChatId) {
   if (task?.type === 'external' && task?.source) return task.source;
+  if (task?.type === 'external' && task?.sourceChat && task?.sourceTaskId) {
+    return `${task.sourceChat}_${task.sourceTaskId}`;
+  }
   return `${task?.ownerChatId || currentChatId}_${task?.taskId}`;
 }
 
@@ -3431,22 +3456,32 @@ async function queryForPrompt(options = {}) {
     ? Number(options.scoreThreshold)
     : Number(settings.score_threshold || 0.25);
   const useRerank = options.useRerank ?? true;
-  const taskQueryLimits = calculateWeightedTaskLimits(tasks, maxResults);
+  const taskQueryLimits = calculateWeightedTaskLimits(tasks, maxResults, { minPositiveLimit: 1 });
 
   let allResults = [];
   let originalQueryCount = 0;
   let rerankApplied = false;
   const taskErrors = [];
+  const taskQueryStats = [];
   for (const task of tasks) {
     const taskLimit = taskQueryLimits.get(task) || 0;
+    const collectionId = getTaskCollectionId(task, chatId);
+    taskQueryStats.push({
+      taskName: task.name || task.taskId,
+      taskId: task.taskId,
+      taskRef: getPlannerTaskRef(task, chatId),
+      collectionId,
+      weight: Number(task.vectorQueryWeight ?? 1) || 0,
+      limit: taskLimit,
+      external: task.type === 'external',
+    });
     if (taskLimit <= 0) continue;
 
-    const collectionId = getTaskCollectionId(task, chatId);
     try {
       const results = await storageAdapter.queryCollection(collectionId, queryText, taskLimit, scoreThreshold);
       const taskResults = collectTextResultsFromVectorResponse(results, task, collectionId);
       originalQueryCount += taskResults.length;
-      const processedTaskResults = await processTaskQueryResults(queryText, taskResults, taskLimit, useRerank);
+      const processedTaskResults = await processTaskQueryResults(queryText, taskResults, taskLimit, useRerank, { ignoreRerankTopN: true });
       if (processedTaskResults.rerankApplied) {
         rerankApplied = true;
       }
@@ -3462,9 +3497,7 @@ async function queryForPrompt(options = {}) {
     }
   }
 
-  if (!rerankApplied) {
-    allResults.sort((a, b) => (b.score || 0) - (a.score || 0));
-  }
+  allResults = limitMergedQueryResults(allResults, maxResults);
 
   const { text: rawText, groupedResults } = formatPlannerQueryResults(allResults);
   const template = String(options.template ?? '{{text}}');
@@ -3482,6 +3515,7 @@ async function queryForPrompt(options = {}) {
       finalCount: allResults.length,
       taskCount: tasks.length,
       taskErrors,
+      taskQueryStats,
       rerankApplied,
       queryInstructionEnabled: !!(instructionEnabled && instruction),
       source: settings.source,
@@ -3498,6 +3532,9 @@ async function diagnosePlannerQuery(options = {}) {
   const taskOptions = getPlannerTaskOptions(chatId);
   const selectedRefs = Array.isArray(options.selectedTaskRefs) ? options.selectedTaskRefs.filter(Boolean) : [];
   const selectedSet = new Set(selectedRefs);
+  const diagnosticMaxResults = Math.max(1, Math.min(100, Math.floor(Number(options.maxResults ?? settings.max_results ?? 10) || 10)));
+  const diagnosticTasks = getVisibleChatTasks(chatId).filter(task => options.includeDisabled ? true : task.enabled);
+  const diagnosticLimits = calculateWeightedTaskLimits(diagnosticTasks, diagnosticMaxResults, { minPositiveLimit: 1 });
 
   push('=== Vectors Enhanced 诊断 ===');
   push(`时间: ${new Date().toLocaleString()}`);
@@ -3523,10 +3560,13 @@ async function diagnosePlannerQuery(options = {}) {
   } else {
     for (const task of taskOptions) {
       const selectedMark = selectedSet.size ? (selectedSet.has(task.ref) ? '选中' : '未选') : '默认候选';
+      const sourceTask = diagnosticTasks.find(item => getPlannerTaskRef(item, chatId) === task.ref);
+      const queryLimit = sourceTask ? (diagnosticLimits.get(sourceTask) || 0) : 0;
       push(`- ${task.name} [${selectedMark}]`);
       push(`  ref=${task.ref}`);
       push(`  collection=${task.collectionId}`);
       push(`  enabled=${task.enabled} global=${task.global} external=${task.external} orphaned=${task.orphaned}`);
+      push(`  weight=${task.weight} queryLimit=${queryLimit}`);
     }
   }
 
