@@ -3466,7 +3466,7 @@ async function queryForPrompt(options = {}) {
   for (const task of tasks) {
     const taskLimit = taskQueryLimits.get(task) || 0;
     const collectionId = getTaskCollectionId(task, chatId);
-    taskQueryStats.push({
+    const taskStat = {
       taskName: task.name || task.taskId,
       taskId: task.taskId,
       taskRef: getPlannerTaskRef(task, chatId),
@@ -3474,19 +3474,34 @@ async function queryForPrompt(options = {}) {
       weight: Number(task.vectorQueryWeight ?? 1) || 0,
       limit: taskLimit,
       external: task.type === 'external',
-    });
-    if (taskLimit <= 0) continue;
+      rawCount: 0,
+      finalCount: 0,
+      rerankApplied: false,
+      reason: '',
+    };
+    taskQueryStats.push(taskStat);
+    if (taskLimit <= 0) {
+      taskStat.reason = 'query_limit_zero';
+      continue;
+    }
 
     try {
       const results = await storageAdapter.queryCollection(collectionId, queryText, taskLimit, scoreThreshold);
       const taskResults = collectTextResultsFromVectorResponse(results, task, collectionId);
+      taskStat.rawCount = taskResults.length;
       originalQueryCount += taskResults.length;
       const processedTaskResults = await processTaskQueryResults(queryText, taskResults, taskLimit, useRerank, { ignoreRerankTopN: true });
+      taskStat.finalCount = processedTaskResults.results.length;
+      taskStat.rerankApplied = !!processedTaskResults.rerankApplied;
+      if (!taskResults.length) taskStat.reason = 'no_vector_hits_or_no_text';
+      else if (!processedTaskResults.results.length) taskStat.reason = 'filtered_after_processing';
       if (processedTaskResults.rerankApplied) {
         rerankApplied = true;
       }
       allResults.push(...processedTaskResults.results);
     } catch (error) {
+      taskStat.reason = 'query_error';
+      taskStat.error = String(error?.message || error);
       taskErrors.push({
         taskName: task.name || task.taskId,
         taskId: task.taskId,
@@ -3544,6 +3559,16 @@ async function diagnosePlannerQuery(options = {}) {
   push(`向量源 source: ${settings.source || '(未设置)'}`);
   push(`storageAdapter: ${storageAdapter ? '已初始化' : '未初始化'}`);
   push(`rerank: ${rerankService?.isEnabled?.() ? '开启' : '关闭'}`);
+  if (rerankService?.config?.validateConfig) {
+    const validation = rerankService.config.validateConfig();
+    if (!validation.valid) push(`rerank 配置错误: ${validation.errors.join('；')}`);
+    else if (rerankService?.config?.getConfig) {
+      const rerankConfig = rerankService.config.getConfig();
+      push(`rerank model: ${rerankConfig.model || '(未设置)'}`);
+      push(`rerank top_n: ${rerankConfig.top_n}`);
+      push(`rerank hybrid_alpha: ${rerankConfig.hybrid_alpha}`);
+    }
+  }
   push(`默认 max_results: ${settings.max_results}`);
   push(`默认 score_threshold: ${settings.score_threshold}`);
   push(`默认 query_messages: ${settings.query_messages}`);
@@ -3594,6 +3619,16 @@ async function diagnosePlannerQuery(options = {}) {
     push(`查询任务数: ${result?.stats?.taskCount ?? 0}`);
     push(`rerankApplied: ${result?.stats?.rerankApplied ? '是' : '否'}`);
     push(`返回文本长度: ${String(result?.text || '').length}`);
+    if (Array.isArray(result?.stats?.taskQueryStats) && result.stats.taskQueryStats.length) {
+      push('');
+      push('=== 每任务查询明细 ===');
+      result.stats.taskQueryStats.forEach(stat => {
+        push(`- ${stat.taskName} (${stat.collectionId})`);
+        push(`  weight=${stat.weight} limit=${stat.limit} raw=${stat.rawCount} final=${stat.finalCount} rerank=${stat.rerankApplied ? '是' : '否'}`);
+        if (stat.reason) push(`  reason=${stat.reason}`);
+        if (stat.error) push(`  error=${stat.error}`);
+      });
+    }
     if (Array.isArray(result?.stats?.taskErrors) && result.stats.taskErrors.length) {
       push('');
       push('=== 任务查询错误 ===');
